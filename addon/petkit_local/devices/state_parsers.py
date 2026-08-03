@@ -655,6 +655,19 @@ def _parse_feeder(body: dict[str, Any]) -> dict[str, Any]:
         ], parsed_fs)
         state["feedState"] = parsed_fs
 
+    # Camera feeders (D4H/D4SH) carry their LAN IP in the free-form `other`
+    # string, e.g. "...,Ip:10.50.0.10,...". The go2rtc camera probe needs
+    # state["ip"] or it never advertises a stream URL — and unlike the litter
+    # parser, this one used to drop it, so a camera feeder's stream stayed
+    # invisible. Prefer a flat Ip/ip key if a firmware ever sends one.
+    ip = body.get("Ip", body.get("ip", ""))
+    if not ip and isinstance(body.get("other"), str):
+        m = re.search(r'Ip:"?([0-9.]+)"?', body["other"])
+        if m:
+            ip = m.group(1)
+    if ip:
+        state["ip"] = ip
+
     _extract_wifi_rssi(body, state)
     return state
 
