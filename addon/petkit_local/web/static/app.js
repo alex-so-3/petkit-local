@@ -2299,30 +2299,155 @@ async function provisionBlufi(service, cfg) {
   return connected;
 }
 
+// PetKit's Ingenic provisioning (0xAAA0) is ASYMMETRIC, reverse-engineered
+// against a live D4H (YumShare Solo, fw 867):
+//
+//   phone -> device (write 0xAAA2): BARE JSON, write-WITH-response. A framed
+//     write, or write-without-response, is ignored in silence. The device also
+//     drops the FIRST write after a fresh connect, so 110 is retried.
+//   device -> phone (notify 0xAAA1): FRAMED —
+//     FA FC FD 46 | 0x13 | seq | len_le16 | json | crc16_le | FB
+//     where len_le16 counts the json PLUS the two trailing CRC bytes.
+//
+// A T6 (upstream issue #9) wanted framed writes instead, so the writer
+// auto-detects: it probes 110 bare, falls back to framed, and uses whichever
+// the device answered for the rest of the flow. CRC-16/CCITT-FALSE throughout.
+const PK_MAGIC = [0xfa, 0xfc, 0xfd, 0x46];
+const PK_TAIL = 0xfb;
+const PK_TYPE_OUT = 0x18;
+
+// CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, xorout 0.
+function pkCrc16(bytes) {
+  let crc = 0xffff;
+  for (const b of bytes) {
+    crc ^= b << 8;
+    for (let i = 0; i < 8; i++) {
+      crc = crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+    }
+  }
+  return crc & 0xffff;
+}
+
+// Wrap one JSON object in the framed envelope (only used for the T6-style
+// fallback path; the D4H takes bare JSON).
+function pkFrame(seq, obj) {
+  const json = new TextEncoder().encode(JSON.stringify(obj));
+  const crc = pkCrc16(json);
+  return new Uint8Array([
+    ...PK_MAGIC,
+    PK_TYPE_OUT,
+    seq & 0xff,
+    json.length & 0xff,
+    (json.length >> 8) & 0xff,
+    ...json,
+    crc & 0xff,
+    (crc >> 8) & 0xff,
+    PK_TAIL,
+  ]);
+}
+
+// Parse one inbound notification (a DataView from Web Bluetooth): framed reply,
+// where len counts json + the 2 CRC bytes, or a bare-JSON reply. Null otherwise.
+function pkParse(view) {
+  const u = new Uint8Array(view.buffer);
+  if (u.length >= 11 && u[0] === 0xfa && u[1] === 0xfc && u[2] === 0xfd && u[3] === 0x46) {
+    const len = u[6] | (u[7] << 8);
+    // len includes the trailing CRC; try that first, then fall back to
+    // stripping the 8-byte header and the crc16 + tail (3 bytes).
+    for (const end of [8 + len - 2, u.length - 3]) {
+      try {
+        return JSON.parse(new TextDecoder().decode(u.slice(8, end)));
+      } catch (e) {
+        /* try next */
+      }
+    }
+    return null;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(u));
+  } catch (e) {
+    return null;
+  }
+}
+
 async function provisionPetkit(service, cfg) {
-  const tx = await service.getCharacteristic(BLE_TX);
-  const rx = await service.getCharacteristic(BLE_RX);
-  let answered = false;
+  const tx = await service.getCharacteristic(BLE_TX); // 0xAAA1 notify
+  const rx = await service.getCharacteristic(BLE_RX); // 0xAAA2 write
+
+  const replies = {}; // key -> payload, as frames land
   await tx.startNotifications();
   tx.addEventListener('characteristicvaluechanged', ev => {
-    answered = true;
-    plog('device: ' + new TextDecoder().decode(ev.target.value));
+    const msg = pkParse(ev.target.value);
+    if (!msg) return;
+    replies[msg.key] = msg.payload || {};
+    plog('device: key ' + msg.key + ' ' + JSON.stringify(msg.payload || {}));
   });
-  const payload = JSON.stringify({ key: 151, payload: cfg.payload });
-  const bytes = new TextEncoder().encode(payload);
-  plog('sending payload (' + bytes.length + ' bytes)');
-  const write = rx.writeValueWithResponse
+
+  const withResp = rx.writeValueWithResponse
     ? rx.writeValueWithResponse.bind(rx)
     : rx.writeValue.bind(rx);
-  for (let i = 0; i < bytes.length; i += 180) {
-    await write(bytes.slice(i, i + 180));
+  const woResp = rx.writeValueWithoutResponse
+    ? rx.writeValueWithoutResponse.bind(rx)
+    : rx.writeValue.bind(rx);
+  let seq = 0;
+  const writers = {
+    bare: obj => withResp(new TextEncoder().encode(JSON.stringify(obj))),
+    framed: obj => woResp(pkFrame(seq++, obj)),
+  };
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  // Detect the write direction with 110. The device drops the first write and
+  // is slow to answer, so give each mode a few tries before giving up.
+  await sleep(1200);
+  let mode = null;
+  outer: for (const m of ['bare', 'framed']) {
+    for (let i = 0; i < 3; i++) {
+      plog('asking the device who it is (key 110, ' + m + ')…');
+      try {
+        await writers[m]({ key: 110, payload: {} });
+      } catch (e) {
+        plog('write error: ' + e.message);
+      }
+      await sleep(2500);
+      if (replies[110]) {
+        mode = m;
+        break outer;
+      }
+    }
   }
-  // The device answers on 0xAAA1 when it accepts the document. Waiting for it
-  // is the difference between "the write returned" and "the device heard us" —
-  // the link used to be torn down 1.5s after the last chunk, which dropped any
-  // reply that was not instant.
-  await new Promise(r => setTimeout(r, 5000));
-  return answered;
+  if (!mode) {
+    plog('the device never answered — make sure it is still in pairing mode.');
+    return false;
+  }
+  plog('device speaks ' + mode + ' — provisioning…');
+
+  const send = async obj => {
+    await writers[mode](obj);
+    await sleep(400);
+  };
+
+  // 151: Wi-Fi + where to phone home. Ack is { state: 1 }.
+  plog('sending Wi-Fi credentials and server address (key 151)…');
+  await send({ key: 151, payload: cfg.payload });
+  for (let i = 0; i < 20 && !(replies[151] && replies[151].state === 1); i++) await sleep(250);
+  if (!(replies[151] && replies[151].state === 1)) {
+    plog('the device did not accept the credentials (no state:1).');
+    return false;
+  }
+
+  // Poll join status (key 112): 0 start, 1 finding, 2 connecting, 6 reaching
+  // server, 7 connected, 10 joined. 7 or 10 is done.
+  plog('credentials accepted — waiting for the device to join the network…');
+  for (let i = 0; i < 25; i++) {
+    await send({ key: 112, payload: {} });
+    await sleep(1000);
+    const st = (replies[112] || {}).state;
+    if (st === 7 || st === 10) {
+      plog('device joined the network');
+      break;
+    }
+  }
+  return true;
 }
 
 async function doProvision() {
@@ -2371,7 +2496,23 @@ async function doProvision() {
     const timezone =
       tzEl && tzEl.value !== '' ? Number(tzEl.value) : -new Date().getTimezoneOffset() / 60;
     const locale = navigator.language || '';
-    const cfg = { ssid, pwd, payload: { ssid, pwd, locale, timezone, apiServers: [server] } };
+    // `ipServers` mirrors `apiServers` and `hide:1` matches the official app —
+    // both present in the only 151 payload confirmed to provision an Ingenic
+    // device (upstream issue #9). Timezone goes out as the one-decimal string
+    // the device echoes back as "&timezone=%.1f", rather than a bare number.
+    const cfg = {
+      ssid,
+      pwd,
+      payload: {
+        ssid,
+        pwd,
+        hide: 1,
+        locale,
+        timezone: timezone.toFixed(1),
+        apiServers: [server],
+        ipServers: [server],
+      },
+    };
 
     // Ask the device which protocol it speaks rather than assuming — but ask
     // for each service BY NAME, never with `getPrimaryServices()`.
