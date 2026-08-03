@@ -15,7 +15,7 @@ import logging
 
 from aiohttp import web
 
-from petkit_local.http.handlers._common import device_id, device_serial
+from petkit_local.http.handlers._common import device_id, device_serial, _coerce_device_id
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +26,14 @@ async def handle_signup(request: web.Request) -> web.Response:
     `mac` and `firmware` are read from the query string only — they are not part
     of the `X-Device` header — and are stored as reported, since nothing else in
     the system can supply them.
+
+    LOCAL PATCH (see CHANGELOG-LOCAL.md): some ESP32-family devices (D4
+    feeder, confirmed on hardware 2026-08-01) send their identity as a
+    `www-form-urlencoded` POST body instead of the query string / X-Device
+    header the Ingenic family uses. When the header/query resolution comes up
+    empty and the request is form-encoded, the body is consulted as a
+    fallback — only for fields still missing, so a value already resolved
+    from the trusted X-Device header is never overridden by the body.
 
     Returns:
         `Device.to_signup()` for the created or existing device. The one
@@ -43,6 +51,22 @@ async def handle_signup(request: web.Request) -> web.Response:
     sn = device_serial(request)
     mac = request.query.get("mac", "")
     firmware = request.query.get("firmware", "")
+
+    if request.content_type == "application/x-www-form-urlencoded" and (
+        petkit_id is None or not sn or not mac or not firmware
+    ):
+        try:
+            form = await request.post()
+        except Exception:
+            form = {}
+        if petkit_id is None:
+            petkit_id = _coerce_device_id(form.get("id"))
+        if not sn:
+            sn = str(form.get("sn", "")).strip()
+        if not mac:
+            mac = str(form.get("mac", "")).strip()
+        if not firmware:
+            firmware = str(form.get("firmware", "")).strip()
 
     if petkit_id is None:
         return web.json_response({"error": "missing device id"}, status=400)

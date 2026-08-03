@@ -161,12 +161,14 @@ LITTER_ACTIONS = {
 def _feed(amount: int = 10) -> Command:
     """Dispense `amount` portions now; amount=0 cancels a pending manual feed.
 
-    The random `id` is the feed's own identifier (localkit FeedRealtime uses
-    the same `r_{date}_{nnnn}-1` shape), not the envelope id.
+    LOCAL PATCH (see CHANGELOG-LOCAL.md): the id's shape was corrected to match
+    real cloud traffic, confirmed twice on a D4 (`r_20260802_882_882-1`,
+    `r_20260802_4057_4057-1`) - the random number appears TWICE before `-1`,
+    not once as the original `r_{date}_{nnnn}-1` assumed.
     """
     return ("feed_realtime", _envelope("thing.service.feed_realtime", {
         "amount": amount,
-        "id": f"r_{time.strftime('%Y%m%d')}_{random.randint(1000, 9999)}-1",
+        "id": (lambda n: f"r_{time.strftime('%Y%m%d')}_{n}_{n}-1")(random.randint(1000, 9999)),
     }))
 
 

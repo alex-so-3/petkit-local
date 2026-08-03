@@ -1,7 +1,7 @@
-name: "PetKit Local"
-description: "Local cloud replacement for PetKit litter boxes, feeders, fountains and accessories"
-version: "1.2.0"
-slug: "petkitlocal"
+name: "PetKit Local (local fork)"
+description: "Local cloud replacement for PetKit litter boxes, feeders, fountains and accessories - local fork with ESP32 dev_signup fix"
+version: "1.2.0-local1"
+slug: "petkitlocal_fork"
 url: "https://github.com/alex-so-3/petkit-local"
 # No `image:` key, so the Supervisor builds this on the user's own machine.
 #

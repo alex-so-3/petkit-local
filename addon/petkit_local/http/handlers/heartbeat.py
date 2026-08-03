@@ -42,6 +42,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 # MQTT service suffix → heartbeat msgType + type field
+# Confirmed against real T5 (Ingenic) cloud traffic. Embedded-Linux family only
+# — see _ESP32_SERVICE_MAP for the ESP32 family, which uses different numbers.
 _SERVICE_MAP = {
     "start": (2, "start"),
     "end": (3, "end"),
@@ -50,8 +52,25 @@ _SERVICE_MAP = {
     "connect": (7, "connect"),
 }
 
+# LOCAL PATCH (see CHANGELOG-LOCAL.md): the ESP32 family does not share the
+# Ingenic family's msgType numbering. Confirmed on real hardware (D4,
+# firmware 1.267, capture 2026-08-01): a property/set command from PetKit's
+# actual cloud arrived over the heartbeat as
+#   {"msgType": 1, "payload": {"lightMode": 0}, "timestamp": ...}
+# — msgType 1, not 5, and with NO "type" key at all (a `None` type_str below
+# means "omit the type field entirely" in _to_heartbeat_content).
+#
+# Only property/set is confirmed. start/end/feed_realtime/connect are NOT
+# verified for ESP32 yet — they fall back to _SERVICE_MAP's numbers below,
+# which are only known-correct for the Ingenic family and may well be wrong
+# here too. If the feed button still does nothing after this patch, that's
+# almost certainly why; it needs its own hardware capture to confirm.
+_ESP32_SERVICE_MAP = {
+    "property/set": (1, None),
+}
 
-def _to_heartbeat_content(cmd: Any) -> str:
+
+def _to_heartbeat_content(cmd: Any, is_next_gen: bool = True) -> str:
     """Convert a queued command into the heartbeat `content` string.
 
     Accepts the several shapes producers queue, in this order: an already
@@ -61,12 +80,21 @@ def _to_heartbeat_content(cmd: Any) -> str:
     is read from the `_service_suffix` marker the producer attached or, failing
     that, inferred from a substring match on its `method`.
 
+    Args:
+        is_next_gen: Which msgType numbering to use. True (default) is the
+            Ingenic/T5 family, confirmed against real cloud traffic. False is
+            the ESP32 family, which uses different numbers - see
+            _ESP32_SERVICE_MAP - and is only confirmed for property/set so far.
+
     Returns:
         A JSON string ``{"msgType": int, "payload": ..., "type": str,
-        "timestamp": int}``. An envelope for an unrecognised service falls back
-        to the `start` service (msgType 2) rather than being dropped, since a
-        command that arrives mislabelled is easier to diagnose from the device's
-        reaction than one that silently disappears.
+        "timestamp": int}`` for the Ingenic family, or the same without the
+        "type" key for the ESP32 family (confirmed: real ESP32 traffic carries
+        no "type" field at all). An envelope for an unrecognised service falls
+        back to the `start` service (msgType 2, Ingenic numbering - no ESP32
+        number is confirmed for it either) rather than being dropped, since a
+        command that arrives mislabelled is easier to diagnose from the
+        device's reaction than one that silently disappears.
     """
     if isinstance(cmd, str):
         return cmd
@@ -92,15 +120,16 @@ def _to_heartbeat_content(cmd: Any) -> str:
                 service = suffix
                 break
 
-    msg_type, type_str = _SERVICE_MAP.get(service, (2, "start"))
+    service_map = _SERVICE_MAP if is_next_gen else {**_SERVICE_MAP, **_ESP32_SERVICE_MAP}
+    msg_type, type_str = service_map.get(service, (2, "start"))
     ts = int(time.time())
 
-    return json.dumps({
-        "msgType": msg_type,
-        "payload": params,
-        "type": type_str,
-        "timestamp": ts,
-    })
+    body: dict[str, Any] = {"msgType": msg_type, "payload": params}
+    if type_str is not None:
+        body["type"] = type_str
+    body["timestamp"] = ts
+
+    return json.dumps(body)
 
 
 #: How long after a CONNECT an `iotStatus=0` is treated as a lagging sample
@@ -191,7 +220,7 @@ async def handle_heartbeat(request: web.Request) -> web.Response:
                 result.append({
                     "time": ts_ms,
                     "timestamp": ts,
-                    "content": _to_heartbeat_content(cmd),
+                    "content": _to_heartbeat_content(cmd, device.is_next_gen),
                 })
             log.info("Heartbeat %s (id=%d): delivering %d commands",
                      device.device_type, device.petkit_id, len(cmds))
