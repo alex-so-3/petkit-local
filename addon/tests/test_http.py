@@ -428,6 +428,7 @@ async def test_esp32_iot_device_info_is_flat():
         r = await client.post("/6/t4/dev_iot_device_info", headers=HDR)
         res = (await r.json())["result"]
         assert "ali" not in res
+        assert res["iotPlatform"] == "ALI"
         assert res["productKey"] and res["deviceSecret"] and res["mqttHost"]
         # Ingenic endpoint -> ali-wrapped
         r2 = await client.post("/6/t4/dev_only_iot_device_info_v2", headers=HDR)

@@ -593,16 +593,14 @@ async def test_provision_ui_has_ble_protocol():
         html = await (await c.get("/")).text()
         assert "Provision via Bluetooth" in html
         js = await (await c.get("/static/app.js")).text()
-        # PetKit's own GATT protocol, from demo/petkit_ble.py
+        # PetKit Ingenic framed JSON.
         assert "0000aaa0-0000-1000-8000-00805f9b34fb" in js  # service
         assert "0000aaa2-0000-1000-8000-00805f9b34fb" in js  # RX (write)
         assert "0000aaa1-0000-1000-8000-00805f9b34fb" in js  # TX (notify)
-        # BLUFI, which the ESP32 models speak instead. Values from ESP-IDF's
-        # `btc_blufi_prf.h`; a D4 exposes no 0xAAA0 service at all, which is
-        # the NotFoundError its owner reported.
+        # PetKit ESP32 custom-data transport.
         assert "0000ffff-0000-1000-8000-00805f9b34fb" in js  # service
-        assert "0000ff01-0000-1000-8000-00805f9b34fb" in js  # phone -> ESP32
-        assert "0000ff02-0000-1000-8000-00805f9b34fb" in js  # ESP32 -> phone
+        assert "0000ff01-0000-1000-8000-00805f9b34fb" in js  # app -> ESP32
+        assert "0000ff02-0000-1000-8000-00805f9b34fb" in js  # ESP32 -> app
         # Which one a device speaks is asked, not assumed from a model table --
         # and asked BY NAME, per service. `getPrimaryServices()` returns what
         # the browser has already discovered for the device, which is not what
@@ -616,29 +614,16 @@ async def test_provision_ui_has_ble_protocol():
         assert js.count("gatt.getPrimaryServices()") == 1
         # Quoted or bare, spaced or not — the payload key is what matters.
         assert re.search(r"""["']?key["']?\s*:\s*151""", js)
-        # Which way a device wants to be WRITTEN to is asked as well, because
-        # the two that have been tested disagree: a T6 takes the framed
-        # envelope (issue #9), a D4H takes bare JSON with response and ignores
-        # a framed write in silence (#11). Both writers have to exist, or one
-        # family provisions and the other reports nothing at all.
-        assert "bare:" in js and "framed:" in js
         # The decoders themselves are exercised for real in test_provision_js.
         assert "function pkParse(" in js and "function pkCrc16(" in js
-        # A BLUFI device answers in PetKit's protocol inside custom data, and
-        # reading only BLUFI's own Wi-Fi report is how a Pura Max that had
-        # accepted everything was reported as never having answered (#5).
+        # ESP32 devices answer with PetKit documents inside custom data, and no
+        # native Wi-Fi provisioning constants should be present to tempt callers.
         assert "BLUFI_DATA_CUSTOM" in js.split("function blufiExplain(")[1][:1200]
-        # And provisioning a BLUFI device sends custom data and NOTHING else.
-        # Driving BLUFI's own Wi-Fi provisioning as well puts the device on the
-        # network without PetKit's firmware ever reading the server list, so it
-        # comes up online — on PetKit's cloud. Confirmed on a T4; PetKit's app
-        # sends no native Wi-Fi frames at all.
-        blufi = js.split("async function provisionBlufi(")[1]
-        blufi = blufi[: blufi.index("\n}\n")]
-        for never in ("BLUFI_CTRL_CONN_TO_AP", "BLUFI_DATA_STA_SSID",
-                      "BLUFI_DATA_STA_PASSWD", "BLUFI_CTRL_SET_WIFI_OPMODE"):
-            assert never not in blufi, never
-        assert blufi.count("blufiSend(") == 1
+        for never in ("SET_WIFI_OPMODE", "STA_SSID", "STA_PASSWD", "CONN_TO_AP"):
+            assert never not in js, never
+        for timeout in ("const T_IDENT = 5000", "const T_ACK = 10000",
+                        "const T_JOIN = 120000"):
+            assert timeout in js, timeout
         # The self-signed HTTPS panel on 8098 is gone — it published this
         # whole unauthenticated API to the LAN. Nothing may hand out that port.
         info = await (await c.get("/api/info")).json()

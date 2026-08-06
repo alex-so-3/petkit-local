@@ -2037,52 +2037,29 @@ async function removePatch(id, patcher, name) {
 // decided by asking it, not by a model table: connect, then look for whichever
 // GATT service it exposes. A table would need updating for every codename and
 // would be wrong the first time a model shipped a different board.
+// 1. PetKit Ingenic devices (T5/T6/T7/D4H/D4SH/W7H): framed JSON written to
+//    0xAAA2, answered on 0xAAA1.
+// 2. PetKit ESP32 devices (T4, D4): PetKit JSON carried as custom
+//    data on service 0xFFFF, write 0xFF01, notify 0xFF02.
 //
-// 1. PetKit's own, on the Ingenic models (T5/T6/T7/D4H/D4SH/W7H): one JSON
-//    document written to 0xAAA2, answered on 0xAAA1. Protocol per petkit-root's
-//    BLE tool.
-// 2. BLUFI, on the ESP32 models (T4, D4, ...): Espressif's own provisioning
-//    profile, service 0xFFFF, write 0xFF01, notify 0xFF02. Confirmed in the
-//    firmware itself — D4 1.267 and T4 1.652 carry the whole BLUFI stack
-//    (`BLUFI VERSION`, `btc_blufi_protocol_handler`, `btc_blufi_send_custom_data`)
-//    and no 0xAAA0 service at all, which is exactly the `NotFoundError` a D4
-//    owner reported.
-//
-// The payload is the SAME either way — the D4's string pool holds `ssid`,
-// `pwd`, `timezone`, `locale`, `apiServers` just as the Ingenic models do. Only
-// how it is carried differs.
 const BLE_SERVICE = '0000aaa0-0000-1000-8000-00805f9b34fb';
 const BLE_TX = '0000aaa1-0000-1000-8000-00805f9b34fb';
 const BLE_RX = '0000aaa2-0000-1000-8000-00805f9b34fb';
 
-// BLUFI, all values taken from ESP-IDF's own headers
-// (`btc_blufi_prf.h`, `blufi_int.h`) rather than from documentation.
 const BLUFI_SERVICE = '0000ffff-0000-1000-8000-00805f9b34fb';
-const BLUFI_P2E = '0000ff01-0000-1000-8000-00805f9b34fb'; // phone -> ESP32, write
-const BLUFI_E2P = '0000ff02-0000-1000-8000-00805f9b34fb'; // ESP32 -> phone, notify
-const BLUFI_TYPE_CTRL = 0x0;
-const BLUFI_TYPE_DATA = 0x1;
-// BLUFI's own Wi-Fi provisioning. DELIBERATELY UNUSED — kept named so that
-// what is not sent is as legible as what is, because sending them is worse
-// than useless here: they make the ESP's BLUFI layer join the network on its
-// own, without PetKit's firmware ever reading the server list, and the device
-// then comes up online on PetKit's cloud. Confirmed on a T4. PetKit's app
-// sends none of them; the SSID and password go inside the custom-data JSON.
-const BLUFI_CTRL_SET_SEC_MODE = 0x01;
-const BLUFI_CTRL_SET_WIFI_OPMODE = 0x02;
-const BLUFI_CTRL_CONN_TO_AP = 0x03;
-const BLUFI_DATA_STA_SSID = 0x02;
-const BLUFI_DATA_STA_PASSWD = 0x03;
-const BLUFI_DATA_WIFI_REP = 0x0f;
-const BLUFI_DATA_ERROR_INFO = 0x12;
+const BLUFI_P2E = '0000ff01-0000-1000-8000-00805f9b34fb'; // app -> device, write
+const BLUFI_E2P = '0000ff02-0000-1000-8000-00805f9b34fb'; // device -> app, notify
+const BLUFI_TYPE_DATA = 0x01;
 const BLUFI_DATA_CUSTOM = 0x13;
 const BLUFI_FC_FRAG = 0x10;
-// ESP-IDF's own `BLUFI_FRAG_DATA_DEFAULT_LEN`: what fits beside the header in
-// the DEFAULT 23-byte ATT MTU. Web Bluetooth negotiates its own MTU and will
-// not tell us what it got, so the only safe number is the one the device
-// assumes. The old code split blindly at 180 bytes, which on an unnegotiated
-// link becomes an ATT Long Write that an ESP-IDF GATT server drops in silence.
+// PetKit's ESP32 firmware receives custom data in 12-byte JSON chunks.
 const BLUFI_FRAG_LEN = 12;
+// Timeouts from real captures. Observed worst cases:
+// 110 reply 161 ms, 151 ack 270 ms, credentials-ack to state 7 ~11 s
+// (to state 10, which we do not wait for, 114 s).
+const T_IDENT = 5000;
+const T_ACK = 10000;
+const T_JOIN = 120000;
 
 //: Advertised-name prefixes that can never be provisioned: BLE-only
 //: accessories, which have no WiFi to configure. They show up in the chooser
@@ -2148,19 +2125,11 @@ async function loadProvision() {
   // certificate purely to obtain that secure context. That published the whole
   // unauthenticated API to the LAN, so it is gone: the secure context now has
   // to come from a certificate the operator actually controls.
-  const { card, tooltip } = provisionWarning(hasBt, secure);
-  // The mDNS hint is ADVISORY: the page works, the URL is just one most PetKit
-  // hardware cannot resolve. It must never switch the form off, and it must not
-  // borrow the blocking colour — a user who can provision perfectly well should
-  // not be shown a stopped form.
-  let mdns = '';
-  if (/\.local(?=[:/]|$)/i.test(srv.value || ''))
-    mdns =
-      "⚠ The apiServers URL uses a <code>.local</code> mDNS host — most embedded PetKit devices can't resolve mDNS. Use your HA host's <b>IP</b> instead (e.g. <code>http://&lt;ha-host-ip&gt;:8080/6/</code>).";
-  const full = [card, mdns].filter(Boolean).join('<br>');
-  w.innerHTML = full;
-  w.style.display = full ? 'block' : 'none';
-  w.classList.toggle('stop', !!card);
+  if (srv && !srv._provWarnBound) {
+    srv._provWarnBound = true;
+    srv.addEventListener('input', () => paintProvisionWarnings(hasBt, secure));
+  }
+  paintProvisionWarnings(hasBt, secure);
 
   // Switch the form off, rather than leaving it fully lit and letting the
   // failure arrive on submit. Real `disabled` attributes, so the state reaches
@@ -2219,12 +2188,10 @@ function plog(line) {
   el.scrollTop = el.scrollHeight;
 }
 onAction('provision', () => doProvision());
-// Build one BLUFI frame. `type` is the packed (subtype << 2) | pkt_type byte
-// the protocol calls `type`; the caller passes both halves and this packs them.
-function blufiFrame(pktType, subtype, seq, data, frag, totalLen) {
+function blufiFrame(seq, data, frag, totalLen) {
   const head = [
-    (pktType & 0x03) | (subtype << 2),
-    frag ? BLUFI_FC_FRAG : 0x00, // no encryption, no checksum, phone -> ESP
+    BLUFI_TYPE_DATA | (BLUFI_DATA_CUSTOM << 2),
+    frag ? BLUFI_FC_FRAG : 0x00,
     seq & 0xff,
     frag ? data.length + 2 : data.length,
   ];
@@ -2232,11 +2199,10 @@ function blufiFrame(pktType, subtype, seq, data, frag, totalLen) {
   return new Uint8Array([...head, ...body]);
 }
 
-// Send one logical BLUFI message, fragmenting it if it does not fit.
-async function blufiSend(write, ctr, pktType, subtype, data) {
+async function blufiSend(write, ctr, data) {
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
   if (bytes.length <= BLUFI_FRAG_LEN) {
-    await write(blufiFrame(pktType, subtype, ctr.seq++, bytes, false, 0));
+    await write(blufiFrame(ctr.seq++, bytes, false, 0));
     return;
   }
   for (let off = 0; off < bytes.length; off += BLUFI_FRAG_LEN) {
@@ -2245,20 +2211,48 @@ async function blufiSend(write, ctr, pktType, subtype, data) {
     // device reassembles against — not the length of the whole message.
     const remaining = bytes.length - off;
     const last = off + BLUFI_FRAG_LEN >= bytes.length;
-    await write(blufiFrame(pktType, subtype, ctr.seq++, chunk, !last, remaining));
+    await write(blufiFrame(ctr.seq++, chunk, !last, remaining));
   }
+}
+
+function paintProvisionWarnings(hasBt, secure) {
+  const srv = document.getElementById('p-server');
+  const w = document.getElementById('provWarn');
+  if (!srv || !w) return;
+  const { card } = provisionWarning(hasBt, secure);
+  const full = [card, ...provisionUrlWarning(srv.value || '')].filter(Boolean).join('<br>');
+  w.innerHTML = full;
+  w.style.display = full ? 'block' : 'none';
+  w.classList.toggle('stop', !!card);
+}
+
+function provisionUrlWarning(value) {
+  const out = [];
+  // These hints are ADVISORY: the page works, the URL is just one some PetKit
+  // hardware cannot use. They must never switch the form off, and they must not
+  // borrow the blocking colour — a user who can provision perfectly well should
+  // not be shown a stopped form.
+  if (/\.local(?=[:/]|$)/i.test(value || '')) {
+    out.push(
+      "⚠ The apiServers URL uses a <code>.local</code> mDNS host — most embedded PetKit devices can't resolve mDNS. Use your HA host's <b>IP</b> instead (e.g. <code>http://&lt;ha-host-ip&gt;:8080/6/</code>).",
+    );
+  }
+  try {
+    const u = new URL(value);
+    const port = u.port || (u.protocol === 'http:' ? '80' : u.protocol === 'https:' ? '443' : '');
+    if (port && port !== '80') {
+      out.push(
+        '⚠ ESP32 devices such as T4 and D4 require the API server on port <b>80</b>. Provisioning them will fail with this URL.',
+      );
+    }
+  } catch (e) {
+    /* the field may still be half-typed */
+  }
+  return out;
 }
 
 // Turn one notification from 0xFF02 into something worth putting in the log,
 // recording any PetKit document it carries into `ctx.replies`.
-//
-// The custom-data branch is the whole of issue #5. A Pura Max answered three
-// times with `type 1 subtype 0x13` and the panel printed exactly that and then
-// declared the device had said nothing back — because 0x13 is
-// `BLUFI_DATA_CUSTOM`, the channel we send PetKit's own document ON, and the
-// only subtypes read on the way in were the Wi-Fi report and the error report.
-// The device was answering in PetKit's protocol, inside BLUFI, and we threw it
-// away and told its owner the pairing had failed.
 function blufiExplain(view, ctx) {
   const b = pkBytes(view);
   if (b.length < 4) return 'short frame (' + b.length + 'B)';
@@ -2268,9 +2262,6 @@ function blufiExplain(view, ctx) {
   let data = b.slice(4, 4 + b[3]);
 
   if (pktType === BLUFI_TYPE_DATA && subtype === BLUFI_DATA_CUSTOM) {
-    // BLUFI fragments anything past its negotiated chunk size, and a fragment
-    // is not JSON on its own. When the fragment bit is set the first two bytes
-    // of the data are how much content is still to come, not content.
     if (fc & BLUFI_FC_FRAG) {
       ctx.frag.push(data.slice(2));
       return 'custom data, partial (' + (data.length - 2) + 'B)';
@@ -2287,28 +2278,18 @@ function blufiExplain(view, ctx) {
     return 'key ' + msg.key + ' ' + JSON.stringify(msg.payload || {});
   }
 
-  if (pktType === BLUFI_TYPE_DATA && subtype === BLUFI_DATA_WIFI_REP) {
-    // opmode, sta_conn_state, softap_conn_num, then TLVs
-    return 'wifi status: ' + (data[1] === 0 ? 'CONNECTED' : 'not connected (' + data[1] + ')');
-  }
-  if (pktType === BLUFI_TYPE_DATA && subtype === BLUFI_DATA_ERROR_INFO) {
-    return 'error report, code ' + data[0];
-  }
-  if (pktType === BLUFI_TYPE_CTRL) return 'ack for seq ' + data[0];
-  return 'type ' + pktType + ' subtype 0x' + subtype.toString(16);
+  return 'ignored ESP32 packet type ' + pktType + ' subtype 0x' + subtype.toString(16);
 }
 
 async function provisionBlufi(service, cfg) {
   const p2e = await service.getCharacteristic(BLUFI_P2E);
   const e2p = await service.getCharacteristic(BLUFI_E2P);
 
-  let connected = false;
   const ctx = { frag: [], replies: {} };
   await e2p.startNotifications();
   e2p.addEventListener('characteristicvaluechanged', ev => {
     const text = blufiExplain(ev.target.value, ctx);
     plog('device: ' + text);
-    if (text.startsWith('wifi status: CONNECTED')) connected = true;
   });
 
   const write = p2e.writeValueWithResponse
@@ -2317,64 +2298,111 @@ async function provisionBlufi(service, cfg) {
   const ctr = { seq: 0 };
   const enc = new TextEncoder();
 
-  // ONE frame, and deliberately only one.
-  //
-  // BLUFI can provision Wi-Fi by itself — set the mode, hand it the SSID and
-  // the password, tell it to connect — and this used to do exactly that, with
-  // PetKit's own document sent alongside as an extra. That is what put a T4 on
-  // Wi-Fi and straight back onto PetKit's servers: the ESP's own BLUFI layer
-  // joined the network, the firmware's `key 151` handler never ran, and the
-  // device carried on with whatever server list it already had. Provisioned,
-  // online, visible in PetKit's app, and never once calling this add-on.
-  //
-  // PetKit's app sends no native Wi-Fi frames at all. `PetkitBLEManager` has
-  // one outbound call in it, `postCustomData`, and the SSID and password travel
-  // inside the JSON like every other setting — so the firmware does the joining
-  // itself, after it has read where to phone home. Matching that is the whole
-  // point: a device that ignores this document must fail to join, loudly,
-  // rather than join somebody else.
-  const custom = JSON.stringify(cfg.payload);
-  plog('BLUFI: custom data (' + enc.encode(custom).length + ' bytes)');
-  await blufiSend(write, ctr, BLUFI_TYPE_DATA, BLUFI_DATA_CUSTOM, enc.encode(custom));
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const send = async obj => {
+    const custom = JSON.stringify(obj);
+    plog('ESP32: key ' + obj.key + ' custom data (' + enc.encode(custom).length + ' bytes)');
+    await blufiSend(write, ctr, enc.encode(custom));
+  };
+  let live = true;
+  if (service.device) {
+    service.device.addEventListener('gattserverdisconnected', () => {
+      live = false;
+    });
+  }
+  const until = ms => {
+    const end = Date.now() + ms;
+    return () => live && Date.now() < end;
+  };
 
-  // Hold the link open and take confirmation from either protocol. BLUFI's own
-  // Wi-Fi report is one answer; PetKit's `151 -> state 1` and the join states
-  // of `112` are the other, and a Pura Max sends the second without the first.
-  // Waiting only on the BLUFI report is how a device that had already accepted
-  // everything got reported as never having answered.
-  for (let i = 0; i < 30; i++) {
-    await new Promise(r => setTimeout(r, 500));
-    if (connected || pkJoined(ctx.replies[112])) return true;
+  plog('asking the device who it is (key 110)…');
+  await send({ key: 110 });
+  await sleep(2000);
+  if (live && !ctx.replies[110]) {
+    plog('no identity reply yet — retrying key 110 once…');
+    await send({ key: 110 });
+  }
+  const identing = until(T_IDENT);
+  while (identing() && !ctx.replies[110]) await sleep(250);
+  if (!ctx.replies[110]) {
+    plog(live ? 'timed out waiting for the device identity.' : 'the device disconnected before identifying itself.');
+    return false;
+  }
+
+  plog('sending Wi-Fi credentials and server address (key 151)…');
+  await send({ key: 151, payload: cfg.payload });
+  const acking = until(T_ACK);
+  while (acking() && !(ctx.replies[151] && ctx.replies[151].state === 1)) {
+    if (pkJoinFailed(ctx.replies[151])) {
+      plog('the device refused the credentials: ' + pkJoinState(ctx.replies[151]));
+      return false;
+    }
+    await sleep(250);
+  }
+  if (!(ctx.replies[151] && ctx.replies[151].state === 1)) {
+    plog(
+      live
+        ? 'timed out waiting for the device to accept the credentials.'
+        : 'the device disconnected before accepting the credentials.',
+    );
+    return false;
+  }
+
+  plog('credentials accepted — waiting for the device to join the network…');
+  await send({ key: 112 });
+  let shown = null;
+  let askedWifiDetails = false;
+  let sentLanguage = false;
+  const joining = until(T_JOIN);
+  while (joining()) {
+    await sleep(1000);
+    const state = (ctx.replies[112] || {}).state;
+    if (state !== shown) {
+      shown = state;
+      plog('device: ' + pkJoinState(ctx.replies[112]));
+      if (pkJoinWarn(ctx.replies[112])) {
+        plog(
+          'warning: the device reported a wrong Wi-Fi password. Seen on ESP32 to ' +
+            'recover and join with unchanged credentials, so this is not treated as ' +
+            'fatal — still waiting.',
+        );
+      }
+    }
     if (pkJoinFailed(ctx.replies[112])) {
       plog('the device gave up: ' + pkJoinState(ctx.replies[112]));
       return false;
     }
+    if (pkJoined(ctx.replies[112])) {
+      if (!sentLanguage) {
+        sentLanguage = true;
+        await send({ key: 114, payload: { language: cfg.language } });
+      }
+      plog('device joined — sending completion (key 101)…');
+      await send({ key: 101 });
+      return true;
+    }
+    if (state === 6 && !askedWifiDetails) {
+      askedWifiDetails = true;
+      await send({ key: 111 });
+    } else {
+      await send({ key: 112 });
+    }
   }
-  if (ctx.replies[151] && ctx.replies[151].state === 1) {
-    plog(
-      'the device accepted the credentials but has not reported joining yet ' +
-        '(last status: ' +
-        pkJoinState(ctx.replies[112]) +
-        '). It may still get there — watch the device list.',
-    );
-    return true;
-  }
-  return connected;
+  plog(
+    live
+      ? 'timed out waiting for the device to join (last status: ' +
+          pkJoinState(ctx.replies[112]) +
+          ').'
+      : 'the device disconnected before joining (last status: ' +
+          pkJoinState(ctx.replies[112]) +
+          ').',
+  );
+  return false;
 }
 
-// PetKit's Ingenic provisioning (0xAAA0) is ASYMMETRIC, reverse-engineered
-// against a live D4H (YumShare Solo, fw 867):
-//
-//   phone -> device (write 0xAAA2): BARE JSON, write-WITH-response. A framed
-//     write, or write-without-response, is ignored in silence. The device also
-//     drops the FIRST write after a fresh connect, so 110 is retried.
-//   device -> phone (notify 0xAAA1): FRAMED —
-//     FA FC FD 46 | 0x13 | seq | len_le16 | json | crc16_le | FB
-//     where len_le16 counts the json PLUS the two trailing CRC bytes.
-//
-// A T6 (upstream issue #9) wanted framed writes instead, so the writer
-// auto-detects: it probes 110 bare, falls back to framed, and uses whichever
-// the device answered for the rest of the flow. CRC-16/CCITT-FALSE throughout.
+// PetKit Ingenic provisioning (0xAAA0): both directions use the FA FC FD 46
+// envelope, type 0x18 for app writes and type 0x13 on notifications. The
+// length field includes the JSON plus the two CRC bytes.
 const PK_MAGIC = [0xfa, 0xfc, 0xfd, 0x46];
 const PK_TAIL = 0xfb;
 const PK_TYPE_OUT = 0x18;
@@ -2391,25 +2419,17 @@ function pkCrc16(bytes) {
   return crc & 0xffff;
 }
 
-// Wrap one JSON object in the framed envelope (only used for the T6-style
-// fallback path; the D4H takes bare JSON).
-//
-// `len` here counts the JSON alone, which is NOT what `pkParse` reads on the
-// way in — a D4H's replies count the JSON plus its two CRC bytes. That is not
-// a mistake in either direction: outbound is what a T6 accepted (issue #9) and
-// inbound is what a D4H sends (#11), each measured on its own hardware, and
-// nobody has seen one device do both. The parser therefore tries both endings
-// rather than trusting the field, and this comment exists so that neither side
-// gets "corrected" to match the other by someone reading only one of them.
+// Wrap one JSON object in the framed envelope.
 function pkFrame(seq, obj) {
   const json = new TextEncoder().encode(JSON.stringify(obj));
   const crc = pkCrc16(json);
+  const len = json.length + 2;
   return new Uint8Array([
     ...PK_MAGIC,
     PK_TYPE_OUT,
     seq & 0xff,
-    json.length & 0xff,
-    (json.length >> 8) & 0xff,
+    len & 0xff,
+    (len >> 8) & 0xff,
     ...json,
     crc & 0xff,
     (crc >> 8) & 0xff,
@@ -2435,13 +2455,8 @@ const PK_JOIN_STATES = {
   10: 'online',
 };
 // The states that mean stop waiting and say why.
-const PK_JOIN_FAILED = [3, 4, 5, 8];
-// 7 and 10 both count as done, and neither model reaches both: a T6 goes
-// 0 -> 1 -> 6 -> 10 without ever reporting 7 (issue #9), a D4H stops at 7
-// (#11). 10 is "online", which for PetKit means MQTT is up as well — an ESP32
-// talking to this add-on cannot get there, because the TLS bypass it would
-// need has no ESP32 patcher, so it settles on the HTTP heartbeat instead. That
-// is a working degraded mode, and it is why stopping at 7 is not a failure.
+const PK_JOIN_FAILED = [4, 5, 8];
+const PK_JOIN_WARN = [3];
 const PK_JOIN_DONE = [7, 10];
 
 function pkJoined(payload) {
@@ -2452,9 +2467,14 @@ function pkJoinFailed(payload) {
   return !!payload && PK_JOIN_FAILED.includes(payload.state);
 }
 
+function pkJoinWarn(payload) {
+  return !!payload && PK_JOIN_WARN.includes(payload.state);
+}
+
 function pkJoinState(payload) {
   if (!payload || payload.state === undefined) return 'never reported';
-  return PK_JOIN_STATES[payload.state] || 'state ' + payload.state;
+  const base = PK_JOIN_STATES[payload.state] || 'state ' + payload.state;
+  return payload.code !== undefined ? base + ' (code ' + payload.code + ')' : base;
 }
 
 // A DataView's bytes, and only its own: `view.buffer` is the whole underlying
@@ -2469,8 +2489,8 @@ function pkBytes(view) {
 }
 
 // Parse one inbound PetKit reply: the framed envelope, or bare JSON. Null when
-// it is neither. Accepts raw bytes as well as a DataView, because the same
-// document arrives inside BLUFI custom data on the ESP32 models.
+// it is neither. Accepts raw bytes as well as a DataView, because ESP32 custom
+// data carries the same PetKit document.
 function pkParse(view) {
   const u = view instanceof Uint8Array ? view : pkBytes(view);
   if (u.length >= 11 && u[0] === 0xfa && u[1] === 0xfc && u[2] === 0xfd && u[3] === 0x46) {
@@ -2506,48 +2526,31 @@ async function provisionPetkit(service, cfg) {
     plog('device: key ' + msg.key + ' ' + JSON.stringify(msg.payload || {}));
   });
 
-  const withResp = rx.writeValueWithResponse
-    ? rx.writeValueWithResponse.bind(rx)
-    : rx.writeValue.bind(rx);
   const woResp = rx.writeValueWithoutResponse
     ? rx.writeValueWithoutResponse.bind(rx)
     : rx.writeValue.bind(rx);
   let seq = 0;
-  const writers = {
-    bare: obj => withResp(new TextEncoder().encode(JSON.stringify(obj))),
-    framed: obj => woResp(pkFrame(seq++, obj)),
-  };
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-  // Detect the write direction with 110. The device drops the first write and
-  // is slow to answer, so give each mode a few tries before giving up.
-  await sleep(1200);
-  let mode = null;
-  outer: for (const m of ['bare', 'framed']) {
-    for (let i = 0; i < 3; i++) {
-      plog('asking the device who it is (key 110, ' + m + ')…');
-      try {
-        await writers[m]({ key: 110, payload: {} });
-      } catch (e) {
-        plog('write error: ' + e.message);
-      }
-      await sleep(2500);
-      if (replies[110]) {
-        mode = m;
-        break outer;
-      }
-    }
-  }
-  if (!mode) {
+  const send = async obj => {
+    await woResp(pkFrame(seq++, obj));
+  };
+
+  plog('asking the device who it is (key 110)…');
+  await send({ key: 110 });
+  for (let i = 0; i < 20 && !replies[110]; i++) await sleep(250);
+  if (!replies[110]) {
     plog('the device never answered — make sure it is still in pairing mode.');
     return false;
   }
-  plog('device speaks ' + mode + ' — provisioning…');
-
-  const send = async obj => {
-    await writers[mode](obj);
-    await sleep(400);
-  };
+  // Inter-step delays transcribed from captures of the official app, each
+  // confirmed across two sessions:
+  //   1045  key 110 reply -> key 151 write        (1.054 s, 1.048 s)
+  //   3340  key 151 ack   -> first key 112 poll   (3.344 s, 3.342 s)
+  //   5780  first state 10 -> confirming 112 poll (5.879 s, 5.792 s)
+  //   1030  confirmed 10  -> key 101              (1.101 s, 1.038 s)
+  // Do not round these.
+  await sleep(1045);
 
   // 151: Wi-Fi + where to phone home. Ack is { state: 1 }.
   plog('sending Wi-Fi credentials and server address (key 151)…');
@@ -2561,16 +2564,32 @@ async function provisionPetkit(service, cfg) {
   plog('credentials accepted — waiting for the device to join the network…');
   let shown = null;
   for (let i = 0; i < 25; i++) {
-    await send({ key: 112, payload: {} });
-    await sleep(1000);
+    await sleep(i === 0 ? 3340 : 3000);
+    await send({ key: 112 });
     const state = (replies[112] || {}).state;
     // Only on change: polling once a second would otherwise print the same
     // line twenty-five times and bury the one that matters.
     if (state !== shown) {
       shown = state;
       plog('device: ' + pkJoinState(replies[112]));
+      if (pkJoinWarn(replies[112])) {
+        plog(
+          'warning: the device reported a wrong Wi-Fi password. Seen on ESP32 to ' +
+            'recover and join with unchanged credentials, so this is not treated as ' +
+            'fatal — still waiting.',
+        );
+      }
     }
-    if (pkJoined(replies[112])) return true;
+    if (pkJoined(replies[112])) {
+      await sleep(5780);
+      await send({ key: 112 });
+      await sleep(1030);
+      if (pkJoined(replies[112])) {
+        plog('device joined — sending completion (key 101)…');
+        await send({ key: 101 });
+        return true;
+      }
+    }
     if (pkJoinFailed(replies[112])) {
       plog('the device gave up: ' + pkJoinState(replies[112]));
       return false;
@@ -2648,15 +2667,15 @@ async function doProvision() {
     // and that is the right way round: the number is what the device runs its
     // clock on, the name is a label it stores and echoes back.
     const zoneName = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    const language = (navigator.language || 'en_US').replace('-', '_');
     // Everything below is the app's key-151 payload, field for field
     // (`BleDeviceBindProgressPresenter.proceedNextStep`, PetKit 13.8.1):
     // `hide` is the constant 1 rather than anything about the network, and the
-    // offset goes out as a string of hours. The app also sends `server` on the
-    // BLUFI path and explicitly nulls it on the other one; ours is already in
-    // `apiServers`, and no firmware here reads `server` at all.
+    // offset goes out as a string of hours.
     const cfg = {
       ssid,
       pwd,
+      language,
       payload: {
         ssid,
         pwd,
@@ -2677,8 +2696,8 @@ async function doProvision() {
     // BLE_SERVICE)` can be missing from it — reported by an owner whose feeder
     // paired from the hosted page (still on the 1.4.0 code, which asked by
     // name) and refused to pair from the add-on the moment 1.5.0 switched to
-    // enumerating. So the PetKit path makes the exact call it made when it
-    // worked, BLUFI is a fallback, and the enumeration is demoted to writing
+    // enumerating. So the Ingenic path makes the exact call it made when it
+    // worked, ESP32 is a fallback, and the enumeration is demoted to writing
     // the error message, where an incomplete answer costs nothing.
     const open = async uuid => {
       try {
@@ -2707,7 +2726,7 @@ async function doProvision() {
       st.textContent = ' unknown device.';
       plog(
         "This device answered to neither PetKit's provisioning service (0xAAA0) " +
-          'nor BLUFI (0xFFFF), so there is nothing here that can configure it. ' +
+          'nor PetKit ESP32 provisioning (0xFFFF), so there is nothing here that can configure it. ' +
           'Older models such as the Feeder Mini have no Bluetooth setup at all — ' +
           'those are pointed here with a DNS redirect instead. Services seen: ' +
           seen.join(', '),

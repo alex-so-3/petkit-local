@@ -414,6 +414,7 @@ class Device:
                 "id": self.petkit_id,
                 "deviceName": self.mqtt_device_name,
                 "deviceSecret": self.mqtt_device_secret,
+                "iotPlatform": "ALI",
                 "iotInstanceId": self.mqtt_product_key,
                 "productKey": self.mqtt_product_key,
                 "mqttHost": mqtt_host or self.aliyun_mqtt_host,

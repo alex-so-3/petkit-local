@@ -25,11 +25,10 @@ pytestmark = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="node is needed to run the panel's JavaScript")
 
 #: Lifted from app.js by name. All pure, all DOM-free.
-FUNCTIONS = ("pkCrc16", "pkFrame", "pkParse", "pkBytes", "pkJoined", "pkJoinFailed", "pkJoinState",
-             "blufiExplain")
+FUNCTIONS = ("pkCrc16", "pkFrame", "pkParse", "pkBytes", "pkJoined", "pkJoinFailed", "pkJoinWarn",
+             "pkJoinState", "blufiExplain", "provisionUrlWarning")
 CONSTANTS = ("PK_MAGIC", "PK_TAIL", "PK_TYPE_OUT", "PK_JOIN_STATES", "PK_JOIN_DONE", "PK_JOIN_FAILED",
-             "BLUFI_TYPE_CTRL", "BLUFI_TYPE_DATA", "BLUFI_DATA_WIFI_REP",
-             "BLUFI_DATA_ERROR_INFO", "BLUFI_DATA_CUSTOM", "BLUFI_FC_FRAG")
+             "PK_JOIN_WARN", "BLUFI_TYPE_DATA", "BLUFI_DATA_CUSTOM", "BLUFI_FC_FRAG")
 
 
 def _extract(src: str, name: str) -> str:
@@ -128,16 +127,25 @@ def test_a_notification_is_read_from_its_own_offset():
     assert out["state"] == 1
 
 
-def test_an_outbound_frame_reads_back_as_itself():
+def test_an_outbound_frame_uses_ingenic_crc_length():
     out = _run("""
-      console.log(JSON.stringify({key: pkParse(pkFrame(3, {key: 110, payload: {}})).key}));
+      const frame = pkFrame(0, {key: 110});
+      console.log(JSON.stringify({
+        key: pkParse(frame).key,
+        type: frame[4],
+        seq: frame[5],
+        len: frame[6] | (frame[7] << 8),
+      }));
     """)
     assert out["key"] == 110
+    assert out["type"] == 0x18
+    assert out["seq"] == 0
+    assert out["len"] == len('{"key":110}') + 2
 
 
-def test_a_fragmented_custom_data_reply_is_reassembled():
+def test_a_fragmented_esp32_custom_data_reply_is_reassembled():
     """Issue #5, in one assertion. A Pura Max answered three times with
-    `type 1 subtype 0x13` — BLUFI custom data, the channel PetKit's own
+    `type 1 subtype 0x13` — ESP32 custom data, the channel PetKit's own
     document rides on — and the panel logged the subtype number, kept none of
     it, and told the owner the device had never answered.
 
@@ -161,21 +169,8 @@ def test_a_fragmented_custom_data_reply_is_reassembled():
     assert out["line"].startswith("key 151")
 
 
-def test_the_blufi_branches_that_already_worked_still_do():
-    out = _run(ACK_JS + """
-      const ctx = {frag: [], replies: {}};
-      console.log(JSON.stringify({
-        wifi: blufiExplain(blufiPkt(0x0f, 0, new Uint8Array([1, 0, 0])), ctx),
-        err:  blufiExplain(blufiPkt(0x12, 0, new Uint8Array([7])), ctx),
-      }));
-    """)
-    assert "CONNECTED" in out["wifi"]
-    assert "code 7" in out["err"]
-
-
-def test_both_join_states_count_as_joined():
-    """A T6 went 0 -> 1 -> 6 -> 10 and never reported 7 (issue #9); a D4H
-    stopped at 7 (#11). Waiting on either one alone hangs on half the models."""
+def test_server_connected_and_online_count_as_joined():
+    """State 7 and 10 are successful. State 9 is MQTT progress and keeps polling."""
     out = _run("""
       console.log(JSON.stringify({
         s7: pkJoined({state: 7}), s10: pkJoined({state: 10}),
@@ -189,13 +184,30 @@ def test_both_join_states_count_as_joined():
     assert "connecting to the server" in out["named"]
 
 
+def test_wrong_password_state_is_a_warning_not_terminal():
+    """An ESP32 capture reported state 3/code 2 at 16:04:18, then recovered and
+    reached server setup with unchanged credentials in the same session."""
+    out = _run("""
+      console.log(JSON.stringify({
+        failed: pkJoinFailed({state: 3, code: 2}),
+        warned: pkJoinWarn({state: 3, code: 2}),
+        named: pkJoinState({state: 3, code: 2}),
+        failedStates: PK_JOIN_FAILED,
+      }));
+    """)
+    assert not out["failed"]
+    assert out["warned"]
+    assert out["named"] == "the Wi-Fi password is wrong (code 2)"
+    assert 3 not in out["failedStates"]
+
+
 def test_a_reported_failure_is_named_rather_than_numbered():
     """The four failure states came out of PetKit's own app, which logs one
     line per state. Without them a wrong Wi-Fi password rendered as "state 3"
     and the panel went on polling for another twenty-four seconds."""
     out = _run("""
       console.log(JSON.stringify({
-        pwd: [pkJoinFailed({state: 3}), pkJoinState({state: 3})],
+        pwd: [pkJoinWarn({state: 3}), pkJoinState({state: 3})],
         missing: [pkJoinFailed({state: 4}), pkJoinState({state: 4})],
         wifi: [pkJoinFailed({state: 5}), pkJoinState({state: 5})],
         server: [pkJoinFailed({state: 8}), pkJoinState({state: 8})],
@@ -209,3 +221,16 @@ def test_a_reported_failure_is_named_rather_than_numbered():
     assert "could not connect to the server" in out["server"][1]
     # 9 is "connecting to MQTT" — progress, not a verdict.
     assert not out["ok7"] and not out["ok9"] and not out["none"]
+
+
+def test_esp32_provisioning_warns_when_api_url_is_not_port_80():
+    out = _run("""
+      console.log(JSON.stringify({
+        port80: provisionUrlWarning('http://192.168.50.29/6/').join('\\n'),
+        port8080: provisionUrlWarning('http://192.168.50.29:8080/6/').join('\\n'),
+        https: provisionUrlWarning('https://ha.example/6/').join('\\n'),
+      }));
+    """)
+    assert out["port80"] == ""
+    assert "port <b>80</b>" in out["port8080"]
+    assert "port <b>80</b>" in out["https"]
