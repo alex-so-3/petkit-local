@@ -115,6 +115,9 @@ def main() -> None:
     # line.
     parser.add_argument("--web-port", type=int, default=None, help="Web panel port (default 8099)")
     parser.add_argument("--bucket-port", type=int, default=None, help="Media upload bucket port (default 9000)")
+    parser.add_argument("--bucket-endpoint", default=None,
+                        help="Media bucket base URL the device is told to use "
+                             "(default: https://<api-url host>:<bucket-port>)")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     parser.add_argument("--ha-addon", action="store_true", help="Self-configure from /data/options.json + Supervisor (HA add-on mode)")
     args = parser.parse_args()
@@ -155,6 +158,8 @@ def main() -> None:
             config.web_port = args.web_port
         if args.bucket_port is not None:
             config.bucket_port = args.bucket_port
+        if args.bucket_endpoint is not None:
+            config.bucket_endpoint = args.bucket_endpoint
         if args.debug:
             config.log_level = "DEBUG"
 

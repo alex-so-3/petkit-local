@@ -89,6 +89,10 @@ services:
       # host out and there is nothing to derive them from — media uploads in
       # particular then have nowhere to go, and the add-on says so at startup.
       - --api-url=http://CHANGE-ME:8080/6/
+      # Optional: override the derived https://<api-host>:9000 media upload URL.
+      # Use this when devices must upload through a different hostname, port or
+      # TLS-terminating proxy than the API host.
+      # - --bucket-endpoint=https://CHANGE-ME:9000
       - --port=8080
       - --mqtt-tls
       - --mqtt-tls-port=443

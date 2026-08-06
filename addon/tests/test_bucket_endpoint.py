@@ -6,6 +6,8 @@ add-on path had always been fine because the Supervisor hands over a host IP;
 standalone had nothing and fell back to a constant.
 """
 import json
+import subprocess
+import sys
 
 from petkit_local.config import Config
 from petkit_local.devices.base import Device
@@ -38,6 +40,17 @@ def test_an_explicit_endpoint_wins():
                bucket_endpoint="https://10.0.0.9:9000")
     c.resolve_bucket_endpoint()
     assert c.bucket_endpoint == "https://10.0.0.9:9000"
+
+
+def test_the_cli_exposes_bucket_endpoint():
+    proc = subprocess.run(
+        [sys.executable, "-m", "petkit_local.main", "--help"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert proc.returncode == 0
+    assert "--bucket-endpoint" in proc.stdout
 
 
 def test_no_api_url_leaves_it_empty_rather_than_inventing_one():
