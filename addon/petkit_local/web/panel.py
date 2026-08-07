@@ -79,15 +79,16 @@ from petkit_local.media.go2rtc import stream_urls_with_rtsp
 from petkit_local.patchers.camera import PATCHER_INFO as CAMERA_PATCHER
 from petkit_local.patchers.cloud import PATCHER_INFO as CLOUD_PATCHER, patch_cloud
 from petkit_local.patchers.common import (
-    APP_INIT_WRAPPER, DEVICE_HTTPD_PORT, build_wrapper_remove_cmd, cleanup_staged, download_from_device, ensure_space_for, generate_app_init_wrapper,
-    md5hex, send_run_cmd, stage_file, wait_for_heartbeat,
+    DEVICE_HTTPD_PORT, app_init_wrapper_path, build_wrapper_remove_cmd,
+    cleanup_staged, detect_patch_storage_dir, download_from_device,
+    ensure_space_for, generate_app_init_wrapper, md5hex, patched_file_path,
+    patcher_device_files, send_run_cmd, stage_file, wait_for_heartbeat,
 )
 from petkit_local.patchers.mqtt import PATCHER_INFO as MQTT_PATCHER, patch_ctrl
 from petkit_local.patchers.ssh import (
     PATCHER_INFO as SSH_PATCHER, build_install_commands as ssh_install_commands,
     ARCH_TO_BINARY as SSH_ARCH_TO_BINARY,
-    AUTHKEYS_PATH, DBKEY_PATH, DBKEY_RESERVE_BYTES,
-    DROPBEAR_PATH, dropbear_path_for,
+    DBKEY_RESERVE_BYTES, dropbear_path_for,
 )
 from petkit_local.patchers.verify import assert_download_plausible, elf_arch
 from petkit_local.utils.coerce import to_int
@@ -2103,7 +2104,6 @@ async def api_patcher_apply(request: web.Request) -> web.Response:
     action = body.get("action", "apply")
     if patcher_id not in ALL_PATCHERS:
         return web.json_response({"error": f"unknown patcher: {patcher_id}"}, status=400)
-
     # SSH needs a public key. Accept it in the request, persist it on the device
     # config so a re-apply after an OTA does not ask again, and validate it
     # before spawning a background task that would fail minutes later.
@@ -2147,7 +2147,8 @@ async def api_patcher_apply(request: web.Request) -> web.Response:
                             f"[{patcher_id}] waiting for the running patcher to finish...")
             async with lock:
                 if action == "remove":
-                    await _patcher_remove(d, patcher_id, download_base, hub, request.app)
+                    await _patcher_remove(d, patcher_id, device_ip, download_base,
+                                          hub, request.app)
                 else:
                     await _patcher_apply(d, patcher_id, device_ip, download_base, hub, request.app)
         except asyncio.CancelledError:
@@ -2200,6 +2201,9 @@ async def _patcher_apply(d: Device, patcher_id: str, device_ip: str, download_ba
     cfg = app.get("cfg", {})
     data_dir = cfg.get("data_dir", "/data") if "data_dir" in cfg else "/data"
     P = f"[{patcher_id}]"
+    storage_dir = await detect_patch_storage_dir(d, device_ip, bridge=bridge)
+    reg.save()
+    wrapper_path = app_init_wrapper_path(d)
 
     if patcher_id in ("mqtt", "cloud", "cacert"):
         hub.publish("patcher", did, f"{P} starting temp httpd on device...")
@@ -2215,7 +2219,7 @@ async def _patcher_apply(d: Device, patcher_id: str, device_ip: str, download_ba
                 patched, offset = patch_ctrl(binary)
                 hub.publish("patcher", did, f"{P} patched at offset 0x{offset:x} (md5={md5hex(patched)[:12]})")
                 staged_name = "ctrl_patched"
-                device_path = "/system/ctrl_patched"
+                device_path = patched_file_path(staged_name, d)
             elif patcher_id == "cloud":
                 hub.publish("patcher", did, f"{P} downloading cloud from device...")
                 binary = await download_from_device(device_ip, "cloud")
@@ -2225,7 +2229,7 @@ async def _patcher_apply(d: Device, patcher_id: str, device_ip: str, download_ba
                 names = ", ".join(a["name"] for a in applied if a["status"] == "applied")
                 hub.publish("patcher", did, f"{P} applied {len(applied)} patches: {names}")
                 staged_name = "cloud_patched"
-                device_path = "/system/cloud_patched"
+                device_path = patched_file_path(staged_name, d)
             else:
                 hub.publish("patcher", did, f"{P} downloading ca.crt from device...")
                 ca_data = await download_from_device(device_ip, "ca.crt")
@@ -2235,7 +2239,7 @@ async def _patcher_apply(d: Device, patcher_id: str, device_ip: str, download_ba
                 patched = patch_ca_bundle(ca_data, our_cert)
                 hub.publish("patcher", did, f"{P} appended our cert ({len(patched)} bytes)")
                 staged_name = "ca_patched.crt"
-                device_path = "/system/ca_patched.crt"
+                device_path = patched_file_path(staged_name, d)
         finally:
             # The space probe starts its OWN httpd on a different port, and
             # `killall httpd` cannot target one — so the download server has to
@@ -2248,7 +2252,8 @@ async def _patcher_apply(d: Device, patcher_id: str, device_ip: str, download_ba
         hub.publish("patcher", did, f"{P} checking free space on device...")
         hub.publish("patcher", did, f"{P} " + await ensure_space_for(
             d, device_ip, write_bytes=len(patched),
-            targets=[device_path, APP_INIT_WRAPPER], bridge=bridge))
+            targets=[device_path, wrapper_path], bridge=bridge,
+            mount=storage_dir))
 
         stage_file(staged_name, patched)
         hub.publish("patcher", did, f"{P} uploading {staged_name} to device...")
@@ -2290,17 +2295,18 @@ async def _patcher_apply(d: Device, patcher_id: str, device_ip: str, download_ba
 
         from petkit_local.patchers.ssh import AUTHKEYS_STAGED_NAME
         authkeys = (pubkey.strip() + "\n").encode()
+        ssh_paths = patcher_device_files(SSH_PATCHER, d)
         hub.publish("patcher", did, f"{P} checking free space on device...")
         hub.publish("patcher", did, f"{P} " + await ensure_space_for(
             d, device_ip, write_bytes=len(dropbear) + len(authkeys) + DBKEY_RESERVE_BYTES,
-            targets=[DROPBEAR_PATH, AUTHKEYS_PATH, DBKEY_PATH, APP_INIT_WRAPPER],
-            bridge=bridge))
+            targets=[*ssh_paths, wrapper_path],
+            bridge=bridge, mount=storage_dir))
 
         stage_file(bin_name, dropbear)
         stage_file(AUTHKEYS_STAGED_NAME, authkeys)
         hub.publish("patcher", did, f"{P} staged {bin_name} + authorized_keys for download")
 
-        cmds = ssh_install_commands(download_base, bin_name)
+        cmds = ssh_install_commands(download_base, bin_name, d)
         for i, cmd in enumerate(cmds, 1):
             hub.publish("patcher", did, f"{P} step {i}/{len(cmds)}: {cmd[:80]}...")
             await send_run_cmd(d, cmd, bridge)
@@ -2314,23 +2320,24 @@ async def _patcher_apply(d: Device, patcher_id: str, device_ip: str, download_ba
 
     else:
         # camera writes no file of its own — but the wrapper below is still a
-        # write to /system, and a full /system is exactly why that would fail
-        # silently, leaving the patch marked active but never taking effect.
+        # write to persistent storage, and a full filesystem is exactly why
+        # that would fail silently, leaving the patch marked active but inert.
         hub.publish("patcher", did, f"{P} checking free space on device...")
         hub.publish("patcher", did, f"{P} " + await ensure_space_for(
-            d, device_ip, write_bytes=0, targets=[APP_INIT_WRAPPER], bridge=bridge))
+            d, device_ip, write_bytes=0, targets=[wrapper_path], bridge=bridge,
+            mount=storage_dir))
 
     active = _get_active_patchers(d)
     active.add(patcher_id)
     _save_active_patchers(d, active, reg)
 
-    hub.publish("patcher", did, f"{P} uploading /system/app_init.sh wrapper...")
-    wrapper_content = generate_app_init_wrapper(active)
+    hub.publish("patcher", did, f"{P} uploading {wrapper_path} wrapper...")
+    wrapper_content = generate_app_init_wrapper(active, d)
     stage_file("app_init.sh", wrapper_content.encode())
     await send_run_cmd(
         d,
-        f"wget -q -O {APP_INIT_WRAPPER} {download_base}/app_init.sh && "
-        f"chmod +x {APP_INIT_WRAPPER}",
+        f"wget -q -O {wrapper_path} {download_base}/app_init.sh && "
+        f"chmod +x {wrapper_path}",
         bridge,
     )
     # Wait for the device to actually fetch the file BEFORE cleaning it up.
@@ -2349,7 +2356,7 @@ async def _patcher_apply(d: Device, patcher_id: str, device_ip: str, download_ba
     hub.publish("patcher", did, f"{P} done - device will reboot, patch active on next boot")
 
 
-async def _patcher_remove(d: Device, patcher_id: str, download_base: str,
+async def _patcher_remove(d: Device, patcher_id: str, device_ip: str, download_base: str,
                           hub: EventHub, app: web.Application) -> None:
     """Drop one patcher from the active set and reboot the device into it.
 
@@ -2362,6 +2369,9 @@ async def _patcher_remove(d: Device, patcher_id: str, download_base: str,
     reg = app["registry"]
     bridge = app.get("bridge")  # see _patcher_apply
     P = f"[{patcher_id}]"
+    await detect_patch_storage_dir(d, device_ip, bridge=bridge)
+    reg.save()
+    wrapper_path = app_init_wrapper_path(d)
 
     active = _get_active_patchers(d)
     active.discard(patcher_id)
@@ -2371,12 +2381,13 @@ async def _patcher_remove(d: Device, patcher_id: str, download_base: str,
     # A pure bind-mount patcher (camera) puts no file on the device, and
     # busybox `rm -f` with no operands prints its usage and exits non-zero —
     # which would be a confusing failure for a step that has nothing to do.
-    files = " ".join(pinfo["files"])
+    file_paths = patcher_device_files(pinfo, d)
+    files = " ".join(file_paths)
     cleanup_cmds = f"rm -f {files}" if files else "true"
 
     if active:
         hub.publish("patcher", did, f"{P} uploading updated wrapper...")
-        wrapper_content = generate_app_init_wrapper(active)
+        wrapper_content = generate_app_init_wrapper(active, d)
         stage_file("app_init.sh", wrapper_content.encode())
         # Delete the patched files and download the new wrapper in one command,
         # so the device never boots with a wrapper that references files that
@@ -2384,8 +2395,8 @@ async def _patcher_remove(d: Device, patcher_id: str, download_base: str,
         await send_run_cmd(
             d,
             f"{cleanup_cmds}; "
-            f"wget -q -O {APP_INIT_WRAPPER} {download_base}/app_init.sh && "
-            f"chmod +x {APP_INIT_WRAPPER}",
+            f"wget -q -O {wrapper_path} {download_base}/app_init.sh && "
+            f"chmod +x {wrapper_path}",
             bridge,
         )
         # Same wait-then-cleanup as apply: the staged file must survive until
@@ -2398,7 +2409,9 @@ async def _patcher_remove(d: Device, patcher_id: str, download_base: str,
         hub.publish("patcher", did, f"{P} rebooting device...")
         await send_run_cmd(d, "reboot", bridge)
     else:
-        await send_run_cmd(d, f"{cleanup_cmds}; {build_wrapper_remove_cmd()} && reboot", bridge)
+        await send_run_cmd(
+            d, f"{cleanup_cmds}; {build_wrapper_remove_cmd(d)} && reboot",
+            bridge)
 
     hub.publish("patcher", did, f"{P} removal queued - device will reboot")
 

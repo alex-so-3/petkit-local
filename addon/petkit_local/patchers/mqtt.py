@@ -192,7 +192,7 @@ def find_offset(data: bytes) -> int:
 def patch_ctrl(data: bytes) -> tuple[bytes, int]:
     """Patch the ctrl binary. Returns (patched_data, offset).
 
-    Works on both MIPS (Ingenic T5/T6/T7/D4H/D4SH) and ARM (W7H) binaries.
+    Works on both MIPS (Ingenic) and ARM (Axera) binaries.
     The architecture is detected from the ELF header, and the right patch
     bytes and search strategy are chosen automatically.
 
@@ -240,14 +240,14 @@ PATCHER_INFO = {
         "This allows the device to connect to petkit-local's embedded MQTT "
         "broker over TLS, enabling real-time commands and event streaming "
         "instead of the slower HTTP heartbeat polling.\n\n"
-        "Works on both MIPS (Ingenic) and ARM (W7H) devices — the right "
+        "Works on both MIPS (Ingenic) and ARM (Axera) devices — the right "
         "patch is chosen from the binary itself.\n\n"
-        "What it does: copies /app/bin/ctrl to /system/ctrl_patched, patches "
+        "What it does: copies /app/bin/ctrl to writable storage, patches "
         "the x509 certificate chain verification function (16 bytes on MIPS, "
-        "8 bytes on ARM), then updates /system/app_init.sh to bind-mount the "
+        "8 bytes on ARM), then updates the boot wrapper to bind-mount the "
         "patched binary before the stock init starts ctrl."
     ),
-    "files": ["/system/ctrl_patched"],
+    "files": ["ctrl_patched"],
     "arch": None,
     # Conservative UI figure: what to tell the user BEFORE we know the model.
     # ctrl is 1,420,656 B on a T5 and 903,148 B on a D4SH; the patch

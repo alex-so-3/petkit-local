@@ -4,7 +4,7 @@
   actually using (same PATH 2 format from note 18)
 - Temporary httpd on the device for file download
 - File staging on the add-on for device wget
-- Unified /system/app_init.sh wrapper generation
+- Unified app_init.sh wrapper generation
 """
 from __future__ import annotations
 
@@ -21,7 +21,6 @@ from typing import Any
 import aiohttp
 
 from petkit_local.devices.base import Device
-
 log = logging.getLogger(__name__)
 
 DEVICE_HTTPD_PORT = 8888
@@ -31,7 +30,7 @@ DEVICE_HTTPD_PORT = 8888
 DEVICE_PROBE_PORT = 8889
 STAGE_DIR = "/tmp/petkit_patcher"
 
-#: /system/app_init.sh is ~1 KB today and every patcher rewrites it.
+#: app_init.sh is ~1 KB today and every patcher rewrites it.
 WRAPPER_RESERVE_BYTES = 4096
 #: Slack for a jffs2 erase block and its metadata. Kept small deliberately:
 #: jffs2 compresses on write, so `df` UNDER-reports what will actually fit and
@@ -42,10 +41,80 @@ SPACE_MARGIN_BYTES = 65536
 class InsufficientDeviceSpace(RuntimeError):
     """Not enough free space on the device for a patch that was about to write."""
 
-# Patched files live in /system (writable jffs2, survives OTA).
-# The unified /system/app_init.sh wrapper does bind-mounts before sourcing
-# the stock /app/script/app_init.sh, so patched binaries are loaded at boot.
+# Patched files live in the writable boot override area. Ingenic boards use
+# /system; Axera ARM boards use /opt. Codename cannot decide this because D4SH
+# ships with both board families under the same type string, so patcher runs
+# probe the device filesystem before choosing.
 APP_INIT_WRAPPER = "/system/app_init.sh"
+OPT_APP_INIT_WRAPPER = "/opt/app_init.sh"
+PATCH_STORAGE_CONFIG_KEY = "patch_storage_dir"
+
+
+def set_patch_storage_dir(device: Device, storage_dir: str) -> None:
+    """Remember the probed writable patch storage directory for this device."""
+    if storage_dir not in ("/system", "/opt"):
+        raise ValueError(f"unsupported patch storage directory: {storage_dir}")
+    device.config[PATCH_STORAGE_CONFIG_KEY] = storage_dir
+
+
+async def detect_patch_storage_dir(device: Device, device_ip: str, *,
+                                   bridge: Any = None,
+                                   timeout: float = 60.0) -> str:
+    """Detect whether patches should persist under /system or /opt.
+
+    The persistent app storage carries user.conf: Ingenic exposes it under
+    /system/user.conf, while Axera exposes it under /opt/user.conf. Do not fall
+    back to codename guesses here: D4SH may be either MIPS/Ingenic or ARM/Axera.
+    """
+    command = (
+        "[ -f /system/user.conf ] && echo STORAGE /system; "
+        "[ -f /opt/user.conf ] && echo STORAGE /opt"
+    )
+    text = await run_cmd_capture(device, device_ip, command, bridge=bridge,
+                                 timeout=timeout)
+    for storage_dir in ("/system", "/opt"):
+        if f"STORAGE {storage_dir}" in (text or ""):
+            set_patch_storage_dir(device, storage_dir)
+            return storage_dir
+
+    raise RuntimeError(
+        f"could not determine writable patch storage for device {device.petkit_id}: "
+        "neither /system/user.conf nor /opt/user.conf exists")
+
+
+def uses_opt_boot(device: Device | None) -> bool:
+    """Whether this device uses the Axera-style /opt app storage."""
+    if device is not None:
+        storage_dir = device.config.get(PATCH_STORAGE_CONFIG_KEY)
+        if storage_dir in ("/system", "/opt"):
+            return storage_dir == "/opt"
+    return False
+
+
+def app_init_wrapper_path(device: Device | None = None) -> str:
+    return OPT_APP_INIT_WRAPPER if uses_opt_boot(device) else APP_INIT_WRAPPER
+
+
+def patch_storage_dir(device: Device | None = None) -> str:
+    return "/opt" if uses_opt_boot(device) else "/system"
+
+
+def patched_file_path(filename: str, device: Device | None = None) -> str:
+    return f"{patch_storage_dir(device)}/{filename}"
+
+
+def patcher_device_files(pinfo: dict[str, Any],
+                         device: Device | None = None) -> list[str]:
+    """Absolute on-device paths for a patcher's declared files.
+
+    Binary/cert patchers declare bare names because their storage directory is
+    model-dependent: /system on Ingenic, /opt on Axera. Absolute paths are passed
+    through as a defensive guard for future patchers with fixed locations.
+    """
+    result: list[str] = []
+    for name in pinfo["files"]:
+        result.append(name if name.startswith("/") else patched_file_path(name, device))
+    return result
 
 
 def build_run_cmd(command: str) -> str:
@@ -382,9 +451,9 @@ def md5hex(data: bytes) -> str:
 # This avoids the test_case_* timing problem (test_case hooks run AFTER
 # processes are already loaded into memory).
 
-WRAPPER_HEADER = """\
+WRAPPER_HEADER_TEMPLATE = """\
 #!/bin/sh
-# /system/app_init.sh - petkit-local patcher wrapper
+# {wrapper} - petkit-local patcher wrapper
 # Auto-generated. Bind-mounts patched files before running the stock init.
 """
 
@@ -394,7 +463,9 @@ WRAPPER_FOOTER = """\
 . /app/script/app_init.sh
 """
 
-# Per-patcher bind-mount blocks. Each is a tuple (patcher_id, shell_lines).
+# Per-patcher bind-mount blocks. Each block is formatted with `store`; write
+# literal shell braces as `{{` and `}}`.
+# Each is a tuple (patcher_id, shell_lines).
 # Only active patchers are included in the generated wrapper.
 #
 # /app/bin/watchdog supervises media, cloud, agora and logUpload. Its liveness
@@ -413,18 +484,18 @@ WRAPPER_FOOTER = """\
 # Hence camera bind-mounts the real tserver binary over agora rather than a
 # placeholder: exec'ing ./agora starts the local streamer, the lsof check
 # passes, and the watchdog now supervises tserver for us.
-BIND_MOUNT_BLOCKS = {
+BIND_MOUNT_TEMPLATES = {
     "mqtt": (
         "# MQTT TLS bypass: patched ctrl accepts any broker certificate\n"
-        "mount --bind /system/ctrl_patched /app/bin/ctrl\n"
+        "mount --bind {store}/ctrl_patched /app/bin/ctrl\n"
     ),
     "cloud": (
         "# Local storage: patched cloud accepts LAN IPs + skips TLS verify\n"
-        "mount --bind /system/cloud_patched /app/bin/cloud\n"
+        "mount --bind {store}/cloud_patched /app/bin/cloud\n"
     ),
     "cacert": (
         "# CA cert: cloud trusts our self-signed bucket certificate\n"
-        "mount --bind /system/ca_patched.crt /app/bin/ca.crt\n"
+        "mount --bind {store}/ca_patched.crt /app/bin/ca.crt\n"
     ),
     "camera": (
         "# Local camera: stock app_start.sh runs ./agora, which is tserver now\n"
@@ -439,13 +510,14 @@ PRE_INIT_BLOCKS = {
     "ssh": (
         "# Persistent SSH (dropbear on port 22)\n"
         "mkdir -p /tmp/.ssh\n"
-        "cp /system/authorized_keys /tmp/.ssh/authorized_keys\n"
-        "/system/dropbear -r /system/dbkey_ecdsa -p 22 &\n"
+        "cp {store}/authorized_keys /tmp/.ssh/authorized_keys\n"
+        "{store}/dropbear -r {store}/dbkey_ecdsa -p 22 &\n"
     ),
 }
 
-def generate_app_init_wrapper(active_patchers: set[str]) -> str:
-    """Generate the /system/app_init.sh wrapper for the given set of active
+def generate_app_init_wrapper(active_patchers: set[str],
+                              device: Device | None = None) -> str:
+    """Generate the app_init.sh wrapper for the given set of active
     patchers. Returns the shell script content.
 
     Everything happens before the stock init is sourced, because the stock
@@ -454,25 +526,29 @@ def generate_app_init_wrapper(active_patchers: set[str]) -> str:
     phase — camera used to start tserver there, and now reaches it through the
     agora bind-mount instead, which also puts it under the watchdog.
     """
-    lines = [WRAPPER_HEADER]
+    lines = [WRAPPER_HEADER_TEMPLATE.format(
+        wrapper=app_init_wrapper_path(device))]
+    store = patch_storage_dir(device)
     # Pre-init: things that must run before stock init (SSH, etc.)
     for pid in ("ssh",):
         if pid in active_patchers and pid in PRE_INIT_BLOCKS:
-            lines.append(PRE_INIT_BLOCKS[pid])
+            lines.append(PRE_INIT_BLOCKS[pid].format(store=store))
     for pid in ("mqtt", "cloud", "cacert", "camera"):
-        if pid in active_patchers and pid in BIND_MOUNT_BLOCKS:
-            lines.append(BIND_MOUNT_BLOCKS[pid])
+        if pid in active_patchers and pid in BIND_MOUNT_TEMPLATES:
+            lines.append(BIND_MOUNT_TEMPLATES[pid].format(store=store))
     lines.append(WRAPPER_FOOTER)
     return "".join(lines)
 
 
-def build_wrapper_upload_cmd(active_patchers: set[str]) -> str:
-    """Build a shell command that writes /system/app_init.sh on the device."""
-    content = generate_app_init_wrapper(active_patchers)
+def build_wrapper_upload_cmd(active_patchers: set[str],
+                             device: Device | None = None) -> str:
+    """Build a shell command that writes the boot wrapper on the device."""
+    wrapper = app_init_wrapper_path(device)
+    content = generate_app_init_wrapper(active_patchers, device)
     escaped = content.replace("'", "'\\''")
-    return f"printf '{escaped}' > {APP_INIT_WRAPPER} && chmod +x {APP_INIT_WRAPPER}"
+    return f"printf '{escaped}' > {wrapper} && chmod +x {wrapper}"
 
 
-def build_wrapper_remove_cmd() -> str:
+def build_wrapper_remove_cmd(device: Device | None = None) -> str:
     """Shell command to remove the wrapper (reverts to stock init on next boot)."""
-    return f"rm -f {APP_INIT_WRAPPER}"
+    return f"rm -f {app_init_wrapper_path(device)}"

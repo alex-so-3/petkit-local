@@ -72,11 +72,11 @@ PATCHER_INFO = {
         "This patch appends the add-on's self-signed certificate to that bundle "
         "so uploads to our local bucket succeed.\n\n"
         "Apply this together with the Local Storage patch.\n\n"
-        "What it does: copies /app/bin/ca.crt to /system/ca_patched.crt, appends "
-        "the add-on's certificate, then updates /system/app_init.sh to "
+        "What it does: copies /app/bin/ca.crt to writable storage, appends "
+        "the add-on's certificate, then updates the boot wrapper to "
         "bind-mount the patched bundle before the stock init starts cloud."
     ),
-    "files": ["/system/ca_patched.crt"],
+    "files": ["ca_patched.crt"],
     # No architecture: this appends PEM text to a certificate bundle and
     # bind-mounts the result. Nothing here is machine code.
     "arch": None,

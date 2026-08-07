@@ -313,11 +313,12 @@ PATCHER_INFO = {
         "Where uploads go is controlled entirely by the STS token response. "
         "Switching back to PetKit cloud requires no patch changes - just "
         "change the server configuration.\n\n"
-        "What it does: copies /app/bin/cloud to /system/cloud_patched, applies "
-        "2 byte-level patches (8 bytes total), then updates "
-        "/system/app_init.sh to bind-mount the patched binary at boot."
+        "What it does: copies /app/bin/cloud to writable storage "
+        "(/system/cloud_patched on Ingenic devices, /opt/cloud_patched on "
+        "Axera devices), applies the byte-level patches, then updates the "
+        "boot wrapper to bind-mount the patched binary at boot."
     ),
-    "files": ["/system/cloud_patched"],
+    "files": ["cloud_patched"],
     "arch": None,
     # Conservative UI figure: what to tell the user BEFORE we know the model.
     # cloud is 304,204 B on a T5 and 188,452 B on a D4SH; size-preserving.

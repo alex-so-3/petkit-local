@@ -1,5 +1,5 @@
 """Tests for petkit_local/patchers/common.py — run_cmd queueing, file staging,
-and the unified /system/app_init.sh wrapper generator."""
+and the unified app_init.sh wrapper generator."""
 import json
 import os
 
@@ -14,8 +14,15 @@ from petkit_local.patchers.common import (
     generate_app_init_wrapper,
     build_wrapper_upload_cmd,
     build_wrapper_remove_cmd,
+    detect_patch_storage_dir,
     APP_INIT_WRAPPER,
+    OPT_APP_INIT_WRAPPER,
+    app_init_wrapper_path,
+    patched_file_path,
+    patcher_device_files,
+    set_patch_storage_dir,
 )
+from petkit_local.patchers.ssh import build_install_commands
 
 
 # --- run_cmd delivery ---
@@ -223,6 +230,111 @@ def test_wrapper_unknown_patcher_ignored():
     assert "bogus" not in w
 
 
+def test_axera_wrapper_uses_opt_storage():
+    d = Device(device_type="d4sh", petkit_id=7)
+    set_patch_storage_dir(d, "/opt")
+    w = generate_app_init_wrapper({"cloud", "cacert"}, d)
+    assert "mount --bind /opt/cloud_patched /app/bin/cloud" in w
+    assert "mount --bind /opt/ca_patched.crt /app/bin/ca.crt" in w
+    assert "/system/cloud_patched" not in w
+    assert ". /app/script/app_init.sh" in w
+
+
+def test_axera_paths_use_opt_boot_override():
+    axera = Device(device_type="d4sh", petkit_id=7)
+    set_patch_storage_dir(axera, "/opt")
+    ing = Device(device_type="d4sh", petkit_id=8)
+    set_patch_storage_dir(ing, "/system")
+    assert app_init_wrapper_path(axera) == OPT_APP_INIT_WRAPPER
+    assert patched_file_path("cloud_patched", axera) == "/opt/cloud_patched"
+    assert app_init_wrapper_path(ing) == APP_INIT_WRAPPER
+    assert patched_file_path("cloud_patched", ing) == "/system/cloud_patched"
+    assert app_init_wrapper_path() == APP_INIT_WRAPPER
+    assert patched_file_path("cloud_patched") == "/system/cloud_patched"
+
+
+async def test_user_conf_probe_prefers_system_when_present(monkeypatch):
+    d = Device(device_type="t5", petkit_id=1)
+
+    async def fake_run_cmd_capture(device, device_ip, command, **kwargs):
+        assert "/system/user.conf" in command
+        assert "/opt/user.conf" in command
+        return "STORAGE /system\nSTORAGE /opt\n"
+
+    monkeypatch.setattr("petkit_local.patchers.common.run_cmd_capture", fake_run_cmd_capture)
+    assert await detect_patch_storage_dir(d, "127.0.0.1") == "/system"
+    assert app_init_wrapper_path(d) == APP_INIT_WRAPPER
+
+
+async def test_user_conf_probe_uses_opt_when_system_is_absent(monkeypatch):
+    d = Device(device_type="d4sh", petkit_id=1)
+
+    async def fake_run_cmd_capture(device, device_ip, command, **kwargs):
+        assert "/system/user.conf" in command
+        assert "/opt/user.conf" in command
+        return "STORAGE /opt\n"
+
+    monkeypatch.setattr("petkit_local.patchers.common.run_cmd_capture", fake_run_cmd_capture)
+    assert await detect_patch_storage_dir(d, "127.0.0.1") == "/opt"
+    assert app_init_wrapper_path(d) == OPT_APP_INIT_WRAPPER
+
+
+async def test_user_conf_probe_refuses_to_guess(monkeypatch):
+    d = Device(device_type="d4sh", petkit_id=1)
+
+    async def fake_run_cmd_capture(device, device_ip, command, **kwargs):
+        return ""
+
+    monkeypatch.setattr("petkit_local.patchers.common.run_cmd_capture", fake_run_cmd_capture)
+    try:
+        await detect_patch_storage_dir(d, "127.0.0.1")
+    except RuntimeError as e:
+        assert "neither /system/user.conf nor /opt/user.conf exists" in str(e)
+    else:
+        raise AssertionError("expected storage probe failure")
+
+
+def test_patcher_device_files_resolves_bare_names_per_device():
+    axera = Device(device_type="d4sh", petkit_id=7)
+    set_patch_storage_dir(axera, "/opt")
+    ing = Device(device_type="d4sh", petkit_id=8)
+    set_patch_storage_dir(ing, "/system")
+    info = {"files": ["cloud_patched", "ca_patched.crt"]}
+    assert patcher_device_files(info, ing) == [
+        "/system/cloud_patched", "/system/ca_patched.crt"]
+    assert patcher_device_files(info, axera) == [
+        "/opt/cloud_patched", "/opt/ca_patched.crt"]
+
+
+def test_patcher_device_files_keeps_absolute_paths():
+    d = Device(device_type="d4sh", petkit_id=7)
+    set_patch_storage_dir(d, "/opt")
+    info = {"files": ["/etc/fixed.conf", "/var/lib/fixed.state"]}
+    assert patcher_device_files(info, d) == [
+        "/etc/fixed.conf", "/var/lib/fixed.state"]
+
+
+def test_ssh_install_commands_use_system_on_ingenic_layout():
+    d = Device(device_type="d4sh", petkit_id=7)
+    set_patch_storage_dir(d, "/system")
+    cmd = "\n".join(build_install_commands("http://host/patcher", "dropbear-mipsel", d))
+    assert "/system/dropbear" in cmd
+    assert "/system/authorized_keys" in cmd
+    assert "/system/dbkey_ecdsa" in cmd
+    assert "/opt/dropbear" not in cmd
+
+
+def test_ssh_install_commands_use_opt_on_axera():
+    d = Device(device_type="d4sh", petkit_id=7)
+    set_patch_storage_dir(d, "/opt")
+    cmd = "\n".join(build_install_commands("http://host/patcher", "dropbear-armv7", d))
+    assert "/opt/dropbear" in cmd
+    assert "/opt/authorized_keys" in cmd
+    assert "/opt/dbkey_ecdsa" in cmd
+    assert "/opt/test_case_root" in cmd
+    assert "/system/dropbear" not in cmd
+
+
 # --- build_wrapper_upload_cmd ---
 
 def test_upload_cmd_writes_wrapper():
@@ -240,9 +352,27 @@ def test_upload_cmd_escapes_single_quotes():
     assert "printf '" in cmd
 
 
+def test_axera_upload_cmd_writes_opt_wrapper():
+    d = Device(device_type="d4sh", petkit_id=7)
+    set_patch_storage_dir(d, "/opt")
+    cmd = build_wrapper_upload_cmd({"cloud"}, d)
+    assert OPT_APP_INIT_WRAPPER in cmd
+    assert "mount --bind /opt/cloud_patched /app/bin/cloud" in cmd
+    assert "/system/app_init.sh" not in cmd
+
+
 # --- build_wrapper_remove_cmd ---
 
 def test_remove_cmd():
     cmd = build_wrapper_remove_cmd()
     assert "rm -f" in cmd
     assert APP_INIT_WRAPPER in cmd
+
+
+def test_axera_remove_cmd_removes_opt_wrapper():
+    d = Device(device_type="d4sh", petkit_id=7)
+    set_patch_storage_dir(d, "/opt")
+    cmd = build_wrapper_remove_cmd(d)
+    assert "rm -f" in cmd
+    assert OPT_APP_INIT_WRAPPER in cmd
+    assert APP_INIT_WRAPPER not in cmd

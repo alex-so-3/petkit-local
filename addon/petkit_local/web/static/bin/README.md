@@ -4,7 +4,8 @@
 
 The SSH daemon the `ssh` patcher installs onto a rooted PetKit device
 (`petkit_local/patchers/ssh.py`). It is served to the device over the patcher
-download path and written to `/system/dropbear`.
+download path and written to persistent app storage (`/system/dropbear` on
+Ingenic devices, `/opt/dropbear` on Axera devices).
 
 | | mipsel | armv7 |
 |---|---|---|
@@ -41,7 +42,7 @@ SHA-256 of each output. Takes about two minutes on a modest x86_64 host.
 
 Root's home is `/` (read-only squashfs), so `~/.ssh/` does not exist and
 cannot be created. `/tmp/.ssh/` is writable (tmpfs). The patcher's boot hook
-copies `/system/authorized_keys` there at startup.
+copies the persistent `authorized_keys` there at startup.
 
 ### 2. Buffer size fix
 
@@ -75,7 +76,7 @@ The device's `/etc/shadow` has a DES crypt hash. DES is deprecated and musl's
 ```
 
 Fallback paths only — the patcher starts dropbear with
-`-r /system/dbkey_ecdsa`, which is persistent across reboots.
+`-r <persistent-storage>/dbkey_ecdsa`, which is persistent across reboots.
 
 ## Build configuration
 
