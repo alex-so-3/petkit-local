@@ -2514,31 +2514,65 @@ function pkParse(view) {
 }
 
 async function provisionPetkit(service, cfg) {
-  const tx = await service.getCharacteristic(BLE_TX); // 0xAAA1 notify
-  const rx = await service.getCharacteristic(BLE_RX); // 0xAAA2 write
+  const chars = await service.getCharacteristics();
+  const byUuid = uuid => chars.find(c => c.uuid === uuid);
+  const tx =
+    byUuid(BLE_TX) ||
+    chars.find(c => c.properties && (c.properties.notify || c.properties.indicate)); // 0xAAA1 notify
+  const rx =
+    byUuid(BLE_RX) ||
+    chars.find(c => c.properties && (c.properties.writeWithoutResponse || c.properties.write)); // 0xAAA2 write
+  if (!tx || !rx) {
+    plog(
+      'could not find PetKit write/notify characteristics. Seen: ' +
+        chars
+          .map(c => {
+            const p = c.properties || {};
+            return (
+              c.uuid +
+              ' [' +
+              ['notify', 'indicate', 'writeWithoutResponse', 'write'].filter(k => p[k]).join(',') +
+              ']'
+            );
+          })
+          .join(', '),
+    );
+    return false;
+  }
+  plog('PetKit notify: ' + tx.uuid);
+  plog('PetKit write: ' + rx.uuid);
 
   const replies = {}; // key -> payload, as frames land
-  await tx.startNotifications();
   tx.addEventListener('characteristicvaluechanged', ev => {
     const msg = pkParse(ev.target.value);
     if (!msg) return;
     replies[msg.key] = msg.payload || {};
     plog('device: key ' + msg.key + ' ' + JSON.stringify(msg.payload || {}));
   });
+  await tx.startNotifications();
 
-  const woResp = rx.writeValueWithoutResponse
-    ? rx.writeValueWithoutResponse.bind(rx)
-    : rx.writeValue.bind(rx);
+  const write = async frame => {
+    if (rx.writeValueWithResponse) {
+      await rx.writeValueWithResponse(frame);
+    } else {
+      await rx.writeValue(frame);
+    }
+  };
   let seq = 0;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   const send = async obj => {
-    await woResp(pkFrame(seq++, obj));
+    await write(pkFrame(seq++, obj));
   };
 
   plog('asking the device who it is (key 110)…');
   await send({ key: 110 });
   for (let i = 0; i < 20 && !replies[110]; i++) await sleep(250);
+  if (!replies[110]) {
+    plog('no identity reply yet — retrying key 110 once…');
+    await send({ key: 110 });
+    for (let i = 0; i < 20 && !replies[110]; i++) await sleep(250);
+  }
   if (!replies[110]) {
     plog('the device never answered — make sure it is still in pairing mode.');
     return false;
