@@ -2234,7 +2234,7 @@ function provisionUrlWarning(value) {
   // not be shown a stopped form.
   if (/\.local(?=[:/]|$)/i.test(value || '')) {
     out.push(
-      "⚠ The apiServers URL uses a <code>.local</code> mDNS host — most embedded PetKit devices can't resolve mDNS. Use your HA host's <b>IP</b> instead (e.g. <code>http://&lt;ha-host-ip&gt;:8080/6/</code>).",
+      "⚠ The apiServers URL uses a <code>.local</code> mDNS host — most embedded PetKit devices can't resolve mDNS. Use your HA host's <b>IP</b> instead (e.g. <code>http://&lt;ha-host-ip&gt;/6/</code>).",
     );
   }
   try {
@@ -2277,7 +2277,6 @@ function blufiExplain(view, ctx) {
     ctx.replies[msg.key] = msg.payload || {};
     return 'key ' + msg.key + ' ' + JSON.stringify(msg.payload || {});
   }
-
   return 'ignored ESP32 packet type ' + pktType + ' subtype 0x' + subtype.toString(16);
 }
 
@@ -2325,7 +2324,11 @@ async function provisionBlufi(service, cfg) {
   const identing = until(T_IDENT);
   while (identing() && !ctx.replies[110]) await sleep(250);
   if (!ctx.replies[110]) {
-    plog(live ? 'timed out waiting for the device identity.' : 'the device disconnected before identifying itself.');
+    plog(
+      live
+        ? 'timed out waiting for the device identity.'
+        : 'the device disconnected before identifying itself.',
+    );
     return false;
   }
 
@@ -2634,7 +2637,7 @@ async function provisionPetkit(service, cfg) {
   // got onto Wi-Fi as provisioned, which is the one thing 1.5.0 set out to stop
   // doing.
   plog(
-    'the credentials were accepted, but the device did not report joining within ' +
+    'the device did not report joining within ' +
       '25s (last status: ' +
       pkJoinState(replies[112]) +
       '). It may still get there on its own — watch the device list.',
