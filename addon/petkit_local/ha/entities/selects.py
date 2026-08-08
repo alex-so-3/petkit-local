@@ -29,13 +29,17 @@ FEEDER_SELECTS = [
     # because `to_device_info` serves seeded settings back to the device and a
     # made-up value would change the owner's setting.
     #
-    # KNOWN INCOMPLETE: the reference integration writes the PAIR
-    # {"surplusControl": 1, "surplusStandard": <level>} and this sends only the
-    # first half, so the level probably does not take effect. Fixing it needs a
-    # feeder capture showing what the device expects.
+    # The encoding is NOT the paired {0/1} + {1-3} model the reference
+    # integration assumes. Captured live from a D4SH tracking the app's own
+    # writes (2026-08-08): Off=`{surplusControl:0}`, Less=`{30,1}`,
+    # Moderate=`{60,2}`, Full=`{80,3}` — `surplusControl` alone carries both
+    # on/off and level, `surplusStandard` mirrors the level and is left
+    # untouched (not re-zeroed) when switching off. See the paired write in
+    # `ha/commands.py::handle_ha_command`.
     EntityDef(component="select", key="surplus_level", name="Surplus Level",
               value_path="settings.surplusControl", icon="mdi:bowl-mix",
-              options=["disabled", "less", "moderate", "full"]),
+              options=["disabled", "less", "moderate", "full"],
+              option_values=[0, 30, 60, 80]),
 ]
 
 FOUNTAIN_SELECTS = [

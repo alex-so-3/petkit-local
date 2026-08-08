@@ -149,7 +149,7 @@ FOUNTAIN_SWITCHES = [
 # already ship is handled by `pet_det_Enable`.
 #
 # Deliberately NOT here: `flushIntensity`, `flushCycle`, `flushTime`,
-# `waterChangeCycle`, `waterChangeTime`, `addWaterMode` and `targetTemp`. All
+# `waterChangeCycle`, `waterChangeTime`, `addWaterMode` and `heaterTemp`. All
 # are real handlers, but a number or select needs a RANGE and the map gives
 # none, and `Device.to_device_info` serves settings back to the device — so an
 # invented bound is not a display detail, it is a value we would push.

@@ -531,6 +531,46 @@ async def test_multi_config_json_strings():
         await client.close()
 
 
+async def test_d4sh_camera_multi_new_is_format_b():
+    """`cameraMultiNew` is Format B (per-weekday `{rpt, time}` objects) on
+    D4SH, never Format A — sending flat `[start,end]` pairs makes every item
+    fail the firmware's `rpt` lookup and silently empties the schedule table,
+    disabling continuous recording."""
+    reg = DeviceRegistry()
+    client = await _client(reg)
+    try:
+        await client.post("/6/d4sh/dev_signup", headers=HDR)
+        r = await client.post("/6/d4sh/dev_multi_config", headers=HDR)
+        res = (await r.json())["result"]
+        cam_new = json.loads(res["cameraMultiNew"])["cameraMultiNew"]
+        assert "rpt" in cam_new[0]
+        assert "time" in cam_new[0]
+    finally:
+        await client.close()
+
+
+async def test_w7h_multi_config_covers_all_eight_fields():
+    """W7H's `to_multi_config` was previously unhandled (`{"result": {}}`).
+    All 8 fields the firmware decompile confirms it reads should now be
+    present, Format A as flat pairs and Format B as `{rpt, time}` objects."""
+    reg = DeviceRegistry()
+    client = await _client(reg)
+    try:
+        await client.post("/6/w7h/dev_signup", headers=HDR)
+        r = await client.post("/6/w7h/dev_multi_config", headers=HDR)
+        res = (await r.json())["result"]
+        for key in ("lightMultiRange", "toneMultiRange", "distrubMultiRange",
+                    "wlDisturbMultiRange", "awDisturbMultiRange",
+                    "wifiLightAssistMultiRange"):
+            assert isinstance(res[key], str)
+        cam = json.loads(res["cameraMultiRange"])["cameraMultiRange"]
+        assert cam[0]["rpt"] == "1,2,3,4,5,6,7"
+        light_assist = json.loads(res["lightAssistMultiRange"])["lightAssistMultiRange"]
+        assert "rpt" in light_assist[0]
+    finally:
+        await client.close()
+
+
 async def test_ota_check_is_an_empty_object():
     reg = DeviceRegistry()
     client = await _client(reg)

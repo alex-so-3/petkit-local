@@ -56,6 +56,11 @@ CAPABILITY_VALUE_PREFIX = "capabilities."
 # feeder never had and cannot be talked out of.
 LOCAL_VALUE_PREFIX = "local."
 
+# `surplusControl` value -> the `surplusStandard` level it pairs with, from a
+# live D4SH capture of the app's own writes (2026-08-08). `0` (off) has no
+# entry: the app left `surplusStandard` untouched when switching off.
+SURPLUS_CONTROL_TO_STANDARD = {30: 1, 60: 2, 80: 3}
+
 #: Starting values for the `local.` controls, so their entities render a number
 #: instead of "unknown" before anyone touches them. Both are 1 because that is
 #: what PetKit's app sends for its own default manual feed on a Dual-Hopper,
@@ -421,6 +426,26 @@ def handle_ha_command(device: Device, entity: EntityDef, payload: str) -> Comman
                 "takes effect on the next dev_oss_sts_info_new_v2 poll)",
                 cap, value, device.petkit_id)
         return None
+
+    # `surplus_level` writes a PAIR, not a single field: `surplusControl`
+    # carries on/off and level together (0/30/60/80), `surplusStandard`
+    # mirrors the level (1/2/3) and is captured live to be left untouched when
+    # switching off — see ha/entities/selects.py::FEEDER_SELECTS.
+    if comp == "select" and entity.key == "surplus_level":
+        value = _select_value(entity, payload)
+        if value is None:
+            log.warning("Could not coerce payload %r for entity '%s'", payload, entity.key)
+            return None
+        settings = device.config.setdefault("settings", {})
+        settings["surplusControl"] = value
+        params = {"surplusControl": value}
+        level = SURPLUS_CONTROL_TO_STANDARD.get(value)
+        if level is not None:
+            settings["surplusStandard"] = level
+            params["surplusStandard"] = level
+        log.info("Setting surplusControl=%s (surplusStandard=%s) for device %d",
+                 value, level, device.petkit_id)
+        return (PROPERTY_SET_SUFFIX, make_mqtt_property_set(params))
 
     if comp == "button":
         # A consumable reset is recorded HERE, not inferred from the device's

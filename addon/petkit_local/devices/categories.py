@@ -176,6 +176,15 @@ CATEGORY_SPECS: dict[str, CategorySpec] = {
             "ble_response/post",
         ),
         camera_state_topics=("move_detect", "pet_detect"),
+        # T6 has no deodorant/spray cartridge system at all, unlike T5 — no
+        # N50, no N60, nothing for either to report or control.
+        model_excludes=(
+            ("t6", frozenset({
+                "n50_durability", "n60_spray_days", "waste_bin_present",
+                "deodorization_running", "auto_spray", "fixed_time_spray",
+                "deep_spray", "deodorize", "reset_n50",
+            })),
+        ),
     ),
     "feeder": CategorySpec(
         device_types=frozenset(DEVICE_TYPES_FEEDER),

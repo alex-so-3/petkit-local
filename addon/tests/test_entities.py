@@ -46,7 +46,12 @@ EXPECTED_ENTITY_COUNTS = {
     # 42 -> 50 on the D4H, which reports one hopper; the D4SH keeps its second
     # hopper sensor and adds the two per-hopper feed buttons and their portion
     # numbers, for 54.
-    "t3": 45, "t4": 45, "t5": 73, "t6": 73, "t7": 73,
+    # T6 dropped 9 on 2026-08-08: it has no deodorant/spray cartridge system
+    # at all, unlike T5/T7 — no N50, no N60, nothing for either to report or
+    # control (n50_durability, n60_spray_days, waste_bin_present,
+    # deodorization_running, auto_spray, fixed_time_spray, deep_spray,
+    # deodorize, reset_n50).
+    "t3": 45, "t4": 45, "t5": 73, "t6": 64, "t7": 73,
     "feeder": 25, "feedermini": 25, "d3": 25, "d4": 25, "d4s": 25,
     "d4h": 50, "d4sh": 54,
     "w4": 24, "w5": 24, "ctw2": 24, "ctw3": 24, "w7h": 67,

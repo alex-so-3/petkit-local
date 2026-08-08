@@ -645,10 +645,39 @@ class Device:
         if self.is_feeder and self.is_camera:
             return {"result": {
                 "detectMultiRange": mc("detectMultiRange", [[0, 1440]]),
-                "cameraMultiNew": mc("cameraMultiNew", [[0, 1440]]),
+                # Format B on D4SH, not A — a bare [[start,end]] fails every
+                # item's `cJSON_GetObjectItem(item, "rpt")` lookup and leaves
+                # the schedule table empty, silently disabling continuous
+                # recording (see the schema doc's own war story about this).
+                "cameraMultiNew": mc("cameraMultiNew", [
+                    {"enable": 1, "rpt": "1,2,3,4,5,6,7", "time": [[0, 1440]]}
+                ]),
                 "toneMultiRange": mc("toneMultiRange", [[1320, 360]]),
                 "lightMultiRange": mc("lightMultiRange", [[0, 1440]]),
             }}
+        if self.is_water_fountain:
+            # Confirmed by decompiling `net_dev_multi_config_get`
+            # (`0x000251ac`); a live cloud capture only exercised the first 4
+            # (below the "----"), the other 4 are unverified defaults matching
+            # the paired mode switches' own off-by-default state. No HA entity
+            # reads or writes any of these yet — deliberately not exposed
+            # until real schedule values are captured.
+            result = {
+                "lightMultiRange": mc("lightMultiRange", [[0, 1440]]),
+                "toneMultiRange": mc("toneMultiRange", [[1320, 360]]),
+                "distrubMultiRange": mc("distrubMultiRange", [[40, 520]]),
+                "cameraMultiRange": mc("cameraMultiRange", [
+                    {"enable": 1, "rpt": "1,2,3,4,5,6,7", "time": [[0, 1440]]}
+                ]),
+                # ----
+                "wlDisturbMultiRange": mc("wlDisturbMultiRange", [[-1, -1]]),
+                "awDisturbMultiRange": mc("awDisturbMultiRange", [[-1, -1]]),
+                "wifiLightAssistMultiRange": mc("wifiLightAssistMultiRange", []),
+                "lightAssistMultiRange": mc("lightAssistMultiRange", [
+                    {"rpt": "1,2,3,4,5,6,7", "time": []}
+                ]),
+            }
+            return {"result": result}
         return {"result": {}}
 
     def to_video_device_info(self) -> dict[str, Any]:
