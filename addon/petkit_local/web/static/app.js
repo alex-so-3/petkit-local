@@ -317,7 +317,14 @@ async function loadDevices() {
   for (const d of ds) {
     const panel = devPanel(d.id);
     if (!panel) continue;
-    panel.querySelector('summary').innerHTML = panelSummary(d);
+    // loadDevices() runs on every websocket message this tab is open for, so
+    // this line used to fire far more often than the summary actually changed
+    // — wiping any text selected in it (device name, id) each time. Skipped
+    // when identical; still updates immediately once it genuinely differs,
+    // including the "Xs ago" tick.
+    const sum = panel.querySelector('summary');
+    const sumHtml = panelSummary(d);
+    if (sum.innerHTML !== sumHtml) sum.innerHTML = sumHtml;
     if (panel.open) {
       if (DEV_DETAIL.has(d.id)) paintPanelBody(d.id);
       else scheduleDetail(d.id);
@@ -330,8 +337,19 @@ async function loadDevices() {
     if (!panel) continue;
     // No lazy detail fetch: /api/ble already carries the whole accessory,
     // entities and resolved values included.
-    panel.querySelector('summary').innerHTML = accSummary(a);
-    if (panel.open) panel.querySelector('.devbody').innerHTML = accBody(a);
+    const sum = panel.querySelector('summary');
+    const sumHtml = accSummary(a);
+    if (sum.innerHTML !== sumHtml) sum.innerHTML = sumHtml;
+    if (panel.open) {
+      // Unlike paintPanelBody, this had no guard at all: an open accessory
+      // panel redrew its whole body on every refresh, unconditionally,
+      // regardless of focus or whether the content had changed.
+      const body = panel.querySelector('.devbody');
+      if (body && !body.contains(document.activeElement)) {
+        const bodyHtml = accBody(a);
+        if (body.innerHTML !== bodyHtml) body.innerHTML = bodyHtml;
+      }
+    }
   }
 }
 function gotoTab(t) {
@@ -477,7 +495,12 @@ function paintPanelBody(id) {
   // Never redraw under the user's cursor: with N panels auto-refreshing every
   // ~10s, a repaint would silently wipe a half-typed raw command or schedule.
   if (body.contains(document.activeElement)) return;
-  body.innerHTML = renderPanelBody(d);
+  const html = renderPanelBody(d);
+  // Same detail can repaint several times a minute on a chatty device (each
+  // websocket message flushes every dirty panel); skip the write when nothing
+  // actually changed so a mouse selection in the body survives an update that
+  // wouldn't have shown anything different anyway.
+  if (body.innerHTML !== html) body.innerHTML = html;
 }
 
 // The device echoes back which mugshots it actually holds, as the
@@ -2902,6 +2925,10 @@ let TL_DATE = null,
 let TL_DEBUG = false;
 const TL_DBG_OPEN = new Set();
 const TL_DBG_CACHE = new Map();
+// Same idea as TL_DBG_OPEN: a session's "show N more steps" panel reads its
+// open/closed state from here at render time, so it survives a websocket-
+// triggered re-render instead of collapsing every time a new event arrives.
+const TL_MORE_OPEN = new Set();
 try {
   TL_DEBUG = localStorage.getItem('tlDebug') === '1';
 } catch (_) {
@@ -2963,8 +2990,16 @@ async function loadTimeline() {
     ['health_alert', 'Health Alert'],
     ['fault', 'Faults'],
   ];
-  v.innerHTML = `<div class="card">
-    <div class="row" style="align-items:center;margin-bottom:10px">
+  // Split from the filters block below on purpose. scheduleTimeline() runs
+  // ONLY on a websocket 'event'/'media' message, and that message is exactly
+  // what bumps one of the filter-chip counts — so if the <select> lived in
+  // the same diffed string as those counts, "a refresh happened" and "this
+  // block's HTML changed" would be the same fact, every single time, and the
+  // diff-guard would never once save it. Kept separate, the <select> (and its
+  // open native dropdown) is only rebuilt when the device list or the chosen
+  // device actually changes.
+  const controlsHtml = `<div class="card">
+    <div class="row" style="align-items:center">
       <button class="ghost act" data-action="tl-shift" data-n="-1">◂</button>
       <input type="date" id="tlDate" value="${esc(TL_DATE)}" data-change="tl-date" style="width:auto">
       <button class="ghost act" data-action="tl-shift" data-n="1" ${TL_DATE >= todayLocal() ? 'disabled' : ''}>▸</button>
@@ -2974,6 +3009,8 @@ async function loadTimeline() {
       </select>
       <span class="grow"></span>
     </div>
+  </div>`;
+  const filtersHtml = `<div class="card">
     ${
       pets.length
         ? `<div class="row tl-filterbar" style="align-items:center">
@@ -2992,10 +3029,81 @@ async function loadTimeline() {
       <span class="grow"></span>
       <label class="mut tl-dbgtog"><input type="checkbox" ${TL_DEBUG ? 'checked' : ''} data-change="tl-debug"> Debug info</label>
     </div>
-  </div>
-  ${data.sessions.length ? data.sessions.map(sessionCard).join('') : '<div class="card"><p class="mut">No activity on this day.</p></div>'}`;
+  </div>`;
+  // The session list is the same story at a bigger scale: a websocket
+  // 'event'/'media' message re-fetches and re-renders the whole timeline, and
+  // with a plain innerHTML swap that tore down and rebuilt every card on
+  // every message — collapsing "show more" panels and clobbering any text
+  // selection, even for sessions whose content hadn't changed at all (an
+  // event's content never changes after ingest, so most cards are identical
+  // between refreshes). Reconciling by session id below leaves an unchanged
+  // card's DOM node untouched and only replaces the ones that actually
+  // differ.
+  let controlsEl = v.querySelector(':scope > .tl-controls');
+  let filtersEl = v.querySelector(':scope > .tl-filters');
+  let listEl = v.querySelector(':scope > .tl-sessions');
+  if (!controlsEl || !filtersEl || !listEl) {
+    v.innerHTML =
+      '<div class="tl-controls"></div><div class="tl-filters"></div><div class="tl-sessions"></div>';
+    controlsEl = v.querySelector(':scope > .tl-controls');
+    filtersEl = v.querySelector(':scope > .tl-filters');
+    listEl = v.querySelector(':scope > .tl-sessions');
+  }
+  if (controlsEl.innerHTML !== controlsHtml) controlsEl.innerHTML = controlsHtml;
+  if (filtersEl.innerHTML !== filtersHtml) filtersEl.innerHTML = filtersHtml;
+  reconcileSessions(listEl, data.sessions);
   v.classList.toggle('dbg', TL_DEBUG);
   observeLazyVideos();
+}
+
+function reconcileSessions(list, sessions) {
+  if (!sessions.length) {
+    list.innerHTML = '<div class="card"><p class="mut">No activity on this day.</p></div>';
+    return;
+  }
+  const tmp = document.createElement('div');
+  tmp.innerHTML = sessions.map(sessionCard).join('');
+  const oldBySid = new Map();
+  for (const el of list.children) {
+    if (el.dataset && el.dataset.sid) oldBySid.set(el.dataset.sid, el);
+  }
+  let cursor = list.firstChild;
+  for (const fresh of Array.from(tmp.children)) {
+    const sid = fresh.dataset.sid;
+    const old = sid ? oldBySid.get(sid) : null;
+    if (old) {
+      oldBySid.delete(sid);
+      patchCard(old, fresh);
+      if (old !== cursor) list.insertBefore(old, cursor);
+      cursor = old.nextSibling;
+    } else {
+      list.insertBefore(fresh, cursor);
+      cursor = fresh.nextSibling;
+    }
+  }
+  // Whatever is left was in the previous render but not this one — filtered
+  // out, or off the edge of the day.
+  for (const el of oldBySid.values()) el.remove();
+}
+
+// A session's autoplaying thumbnail keeps state (loaded src, playback
+// position) on its own <video> node — see observeLazyVideos. A same-session
+// refresh (a new sub-event, a debug panel opening) still differs in
+// innerHTML even when the clip itself hasn't changed, and setting innerHTML
+// destroys and recreates every descendant, restarting that video from frame
+// zero. It reads as a flicker on every refresh even though nothing about the
+// media changed. Moving the live node into the fresh tree first — matched on
+// its source, so it only actually gets replaced when the media it points at
+// changed — keeps it playing uninterrupted through everything else updating
+// around it.
+function patchCard(old, fresh) {
+  if (old.innerHTML === fresh.innerHTML) return;
+  const freshVideos = fresh.querySelectorAll('video.lazyvid');
+  for (const ov of old.querySelectorAll('video.lazyvid')) {
+    const fv = Array.from(freshVideos).find(v => v.dataset.src === ov.dataset.src);
+    if (fv) fv.replaceWith(ov);
+  }
+  old.replaceChildren(...fresh.childNodes);
 }
 function tlShiftDay(n) {
   const d = new Date(TL_DATE + 'T00:00:00Z');
@@ -3172,8 +3280,8 @@ function dbgBody(d) {
         : '<p class="mut">The device sent no content.</p>'
     }
     <h4>Event record</h4><table class="tl-dbgt">${meta}</table>
-    <details class="adv"><summary>Raw content JSON</summary><pre>${esc(JSON.stringify(d.content || {}, null, 2))}</pre></details>
-    <details class="adv"><summary>Raw state snapshot</summary><pre>${esc(JSON.stringify(d.state || {}, null, 2))}</pre></details>
+    <details class="adv" data-toggle="dev-sec" data-id="${esc(e.id)}" data-sec="dbgcontent" ${secOpen(e.id, 'dbgcontent', false) ? 'open' : ''}><summary>Raw content JSON</summary><pre>${esc(JSON.stringify(d.content || {}, null, 2))}</pre></details>
+    <details class="adv" data-toggle="dev-sec" data-id="${esc(e.id)}" data-sec="dbgstate" ${secOpen(e.id, 'dbgstate', false) ? 'open' : ''}><summary>Raw state snapshot</summary><pre>${esc(JSON.stringify(d.state || {}, null, 2))}</pre></details>
   </div>`;
 }
 function _has(m) {
@@ -3231,13 +3339,18 @@ function sessionCard(s) {
   const primary = subs.filter(e => !e.detail),
     detail = subs.filter(e => e.detail);
 
-  return `<div class="card tl-card">
+  return `<div class="card tl-card" data-sid="${esc(s.id)}">
     ${TL_MULTIDEV ? `<span class="tl-dev">${esc(s.device_name || '')}</span>` : ''}
     ${tlRow(s.display_ts ?? s.ts, head, s.media, true, s.id)}
     ${primary.map(e => tlRow(e.ts, esc(e.label || e.event_type || ''), e.media, false, e.id)).join('')}
-    ${detail.length ? `<details class="tl-more"><summary>show ${detail.length} more step${detail.length > 1 ? 's' : ''}</summary>${detail.map(e => tlRow(e.ts, esc(e.label || e.event_type || ''), e.media, false, e.id)).join('')}</details>` : ''}
+    ${detail.length ? `<details class="tl-more" data-toggle="tl-more" data-id="${esc(s.id)}" ${TL_MORE_OPEN.has(String(s.id)) ? 'open' : ''}><summary>show ${detail.length} more step${detail.length > 1 ? 's' : ''}</summary>${detail.map(e => tlRow(e.ts, esc(e.label || e.event_type || ''), e.media, false, e.id)).join('')}</details>` : ''}
   </div>`;
 }
+onToggle('tl-more', el => {
+  const id = String(el.dataset.id);
+  if (el.open) TL_MORE_OPEN.add(id);
+  else TL_MORE_OPEN.delete(id);
+});
 
 // Thumbnails for one media slot-set. Aspect ratio is preserved (object-fit:
 // contain in CSS) — the device's fisheye is square and must not be cropped.
