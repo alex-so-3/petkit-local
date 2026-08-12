@@ -68,6 +68,7 @@ from petkit_local.web.api.pets import (
 )
 from petkit_local.web.api.schedules import api_save_schedule
 from petkit_local.web.api.settings import api_blocked, api_info, api_retention, api_settings
+from petkit_local.web.api.stream import api_stream_proxy, api_turn
 from petkit_local.web.api.timeline import api_event_detail, api_timeline
 from petkit_local.web.appkeys import (
     BACKGROUND_TASKS, BLE_REGISTRY, BRIDGE, CFG, EVENT_STORE, HA_PUBLISHER, HUB,
@@ -237,6 +238,12 @@ def create_panel_app(registry: DeviceRegistry, ble_registry: BLERegistry | None,
     # so `/api/devicelogs` is not swallowed by the catch-all path pattern.
     app.router.add_get("/api/devicelogs", api_device_logs)
     app.router.add_get("/api/devicelogs/{path:.*}", api_device_log_read)
+
+    # --- live view: the go2rtc streaming endpoints, proxied on our origin
+    # (go2rtc's API is loopback-only), plus TURN credentials for off-LAN
+    # WebRTC. Every method: the WS upgrade is a GET but `api/webrtc` is POSTed.
+    app.router.add_route("*", "/api/stream/{path:.*}", api_stream_proxy)
+    app.router.add_get("/api/turn", api_turn)
 
     # --- timeline + media. The thumb route is registered first because
     # `{path:.*}` would otherwise swallow `thumb/...` as a media path.
