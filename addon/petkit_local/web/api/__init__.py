@@ -13,6 +13,9 @@ control:
   with their media (`api_timeline`).
 * **Media** — files and thumbnails out of the friendly media tree
   (`api_media_file`, `api_media_thumb`) and the retention caps (`api_retention`).
+* **Live view** — the streaming subset of go2rtc's API proxied onto our origin,
+  and TURN credentials for watching from off the LAN (`api_stream_proxy`,
+  `api_turn`).
 * **Settings** — the runtime settings that can be flipped without a restart
   (`api_settings`), plus per-device capability/AI toggles.
 * **Patchers** — apply/remove the on-device binary patches (`api_patcher_*`),
@@ -35,6 +38,8 @@ Which module owns what
 `media.py`      serving the friendly media tree, thumbnails, and the role ->
                 slot mapping the Timeline renders from
 `timeline.py`   the grouped day view and one event's stored detail
+`stream.py`     the go2rtc stream proxy and the Cloudflare TURN mint behind a
+                live view
 `pets.py`       pet CRUD, reference face photos, and the cloud import
 `ble.py`        the BLE accessories: pairing, commands, cloud import
 `patchers.py`   applying and removing the on-device binary patches

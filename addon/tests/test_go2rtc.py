@@ -64,11 +64,39 @@ def test_the_stream_name_is_the_petkit_id():
 def test_the_rendered_config_binds_where_we_intend():
     out = g.render_config({"1": "http://d/main.flv?audio=1"}, "/data/go2rtc.log")
     assert f"listen: ':{g.RTSP_PORT}'" in out
-    # The API is loopback-only and WebRTC is off outright: an RTSP source needs
-    # neither, and both would be surface for nothing.
+    # The API is loopback-only, and with no reachable candidate WebRTC stays
+    # off: behind a bridge NAT it would advertise 172.x addresses nothing on
+    # the LAN can reach, so listening would be surface for nothing.
     assert "127.0.0.1:1984" in out
     assert "webrtc:\n  listen: ''" in out
-    assert "  1: http://d/main.flv?audio=1" in out
+    # Two producers per stream: the device FLV (H.264+AAC, what RTSP and MSE
+    # consume) and an on-demand Opus transcode of it, because WebRTC cannot
+    # carry AAC and would otherwise play silent video.
+    assert "  1:\n    - http://d/main.flv?audio=1\n    - ffmpeg:1#audio=opus" in out
+
+
+def test_a_lan_candidate_turns_webrtc_on_and_is_advertised_verbatim():
+    """With a LAN-reachable address, go2rtc listens for WebRTC and advertises
+    exactly that candidate — the browser then connects to it directly."""
+    out = g.render_config({"1": "http://d/main.flv?audio=1"}, "/data/go2rtc.log",
+                          webrtc_candidate="192.0.2.240")
+    assert f"webrtc:\n  listen: ':{g.WEBRTC_PORT}'" in out
+    assert f"    - 192.0.2.240:{g.WEBRTC_PORT}" in out
+    # And a STUN server, so a public (srflx) candidate is offered for the
+    # off-LAN case — the browser side relays via TURN (media/turn.py).
+    assert "stun:stun.cloudflare.com:3478" in out
+
+
+def test_a_candidate_with_an_explicit_port_is_not_rewritten():
+    out = g.render_config({}, "/data/go2rtc.log", webrtc_candidate="192.0.2.240:9000")
+    assert "    - 192.0.2.240:9000" in out
+
+
+def test_lan_ip_never_answers_with_an_unreachable_source():
+    """A loopback (or bridge-NAT) source address is worse than none: it would
+    turn WebRTC on and advertise a candidate no LAN browser can reach."""
+    assert g.lan_ip("") == ""
+    assert g.lan_ip("127.0.0.1") == ""
 
 
 def test_an_empty_stream_set_still_renders_valid_yaml():
