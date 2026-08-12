@@ -40,6 +40,16 @@ Command = tuple[str, dict[str, Any]]
 
 PROPERTY_SET_SUFFIX = "property/set"
 
+# Sentinel suffix marking a command that is NOT a thing/service publish but a
+# shell line for the device's own `run_cmd` path (patchers/common.send_run_cmd,
+# delivered on user/get). The envelope is `{"command": "<shell>"}`, not an
+# Aliyun frame. Both command consumers — the panel (web/api/_common._deliver)
+# and the HA router (ha/command_router) — special-case it. This is how the T6
+# pan buttons reach `/system/motorctl`, the on-device motor tool, because the
+# camera's real-time PTZ runs over Agora RTM and has no HTTP/MQTT command to
+# reproduce (see the T6 pan button group in ha/entities/buttons.py).
+RUN_CMD_SUFFIX = "@run_cmd"
+
 # Media capability toggles (ha/entities/switches.py::CAPABILITY_SWITCHES) route
 # here instead of the generic settings.<field> path below: they don't push
 # anything to the device — the STS response (dev_oss_sts_info_new_v2) is the
@@ -173,6 +183,34 @@ def _device_power(on: bool) -> Command:
 SHARED_ACTIONS = {
     "power_off": lambda device: _device_power(False),
     "power_on": lambda device: _device_power(True),
+}
+
+# --- T6 camera pan (PTZ) --------------------------------------------------
+# The Purobot Ultra's camera sits on a single horizontal stepper. Its real-time
+# PTZ runs over Agora RTM (an end-to-end App<->device path), so there is no
+# cloud HTTP/MQTT command to reproduce — a proxy/capture never sees one. What
+# IS reachable is the device's own `/system/motorctl`, a small tool that drives
+# `/dev/motor` directly (the kernel clamps travel to 0..2500 and there is only
+# the one motor). Each button is one shell line, delivered like any other
+# run_cmd; the buttons are attached to the `t6` model only, in
+# ha/entities/buttons.py, because only that model has the motor.
+_MOTORCTL = "/system/motorctl"
+#: Steps per left/right nudge. Relative, so it composes from wherever the head
+#: is; the kernel clamps at each end. Left travels toward 0 (out into the room),
+#: right toward 2500 (home, lens over the drum).
+_PAN_STEP = 250
+#: The home coordinate: the rest position the firmware itself returns to.
+_PAN_HOME = 2500
+
+
+def _motorctl(args: str) -> Command:
+    return (RUN_CMD_SUFFIX, {"command": f"{_MOTORCTL} {args}"})
+
+
+PTZ_ACTIONS = {
+    "pan_left": lambda device: _motorctl(f"steps -{_PAN_STEP}"),
+    "pan_right": lambda device: _motorctl(f"steps {_PAN_STEP}"),
+    "pan_home": lambda device: _motorctl(f"coord {_PAN_HOME}"),
 }
 
 LITTER_ACTIONS = {
@@ -370,7 +408,8 @@ FOUNTAIN_ACTIONS = {
     "fountain_water_change": lambda device: _fountain_start(5),
 }
 
-ALL_ACTIONS = {**LITTER_ACTIONS, **FEEDER_ACTIONS, **FOUNTAIN_ACTIONS, **SHARED_ACTIONS}
+ALL_ACTIONS = {**LITTER_ACTIONS, **FEEDER_ACTIONS, **FOUNTAIN_ACTIONS, **SHARED_ACTIONS,
+               **PTZ_ACTIONS}
 
 
 def _coerce_switch(payload: str) -> int:

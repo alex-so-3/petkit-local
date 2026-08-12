@@ -26,7 +26,7 @@ from petkit_local.ha.discovery import EntityDef
 from petkit_local.ha.entities.buttons import (
     FEEDER_BUTTONS, FEEDER_DUAL_BUTTONS,
     FOUNTAIN_BUTTONS, FOUNTAIN_W7H_BUTTONS,
-    LITTER_BUTTONS, LITTER_CAMERA_BUTTONS, LITTER_T6_BUTTONS,
+    LITTER_BUTTONS, LITTER_CAMERA_BUTTONS, LITTER_T6_BUTTONS, LITTER_T6_PTZ_BUTTONS,
 )
 from petkit_local.ha.entities.camera import CAMERA_ENTITIES
 from petkit_local.ha.entities.events import (
@@ -185,7 +185,7 @@ CATEGORY_SPECS: dict[str, CategorySpec] = {
         ),
         camera_state_topics=("move_detect", "pet_detect"),
         model_entities=(
-            ("t6", LITTER_T6_BUTTONS),
+            ("t6", (*LITTER_T6_BUTTONS, *LITTER_T6_PTZ_BUTTONS)),
         ),
         # The Purobot Ultra has no N50 cartridge, so the button that claims to
         # reset one cannot be right on this model — and it is not merely inert.

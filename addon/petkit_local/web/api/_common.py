@@ -18,7 +18,9 @@ from typing import Any
 from aiohttp import web
 
 from petkit_local.devices.base import Device, split_bucket_authority
+from petkit_local.ha.commands import RUN_CMD_SUFFIX
 from petkit_local.http.proxy import resolve_upstream
+from petkit_local.patchers.common import send_run_cmd
 from petkit_local.utils.coerce import to_int
 
 log = logging.getLogger(__name__)
@@ -102,7 +104,18 @@ async def _deliver(hub, bridge, d, suffix: str, envelope: Any,
     from MQTT to the heartbeat queue is the part that must not diverge. A failed
     publish is not an error to the caller — the device picks the command up on
     its next poll either way — so `delivered` reports what actually happened.
+
+    A `@run_cmd` suffix is not a thing/service publish: it is a shell line for
+    the device's run_cmd path (the T6 pan buttons), delivered by `send_run_cmd`,
+    which picks MQTT-or-heartbeat itself and returns which it used.
     """
+    if suffix == RUN_CMD_SUFFIX:
+        command = envelope["command"]
+        used = await send_run_cmd(d, command, bridge)
+        hub.record_command(d.petkit_id, used, f"run_cmd {command[:80]}")
+        return web.json_response({"ok": True, "delivered": used, "suffix": suffix,
+                                  "envelope": envelope})
+
     if transport == "auto":
         mqtt_live = d.mqtt_connected and bridge is not None and getattr(bridge, "_client", None)
         transport = "mqtt" if mqtt_live else "heartbeat"

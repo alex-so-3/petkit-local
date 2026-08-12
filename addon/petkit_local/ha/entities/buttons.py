@@ -59,6 +59,21 @@ LITTER_T6_BUTTONS = [
               icon="mdi:door-open"),
 ]
 
+# The T6's camera pans on a single horizontal stepper. These press-and-go
+# buttons drive `/system/motorctl` on the device (see
+# `ha/commands.py::PTZ_ACTIONS`); there is no absolute-position control, because
+# the head has no position report to bind one to — the motor's real-time PTZ
+# lives on Agora RTM, out of this add-on's sight. Only the `t6` model gets them
+# (it is the only one with the motor), via `categories.py` model_entities.
+LITTER_T6_PTZ_BUTTONS = [
+    EntityDef(component="button", key="pan_left", name="Camera Pan Left",
+              icon="mdi:arrow-left-bold-box"),
+    EntityDef(component="button", key="pan_right", name="Camera Pan Right",
+              icon="mdi:arrow-right-bold-box"),
+    EntityDef(component="button", key="pan_home", name="Camera Pan Home",
+              icon="mdi:image-filter-center-focus"),
+]
+
 FEEDER_BUTTONS = [
     EntityDef(component="button", key="feed", name="Feed", icon="mdi:food"),
     EntityDef(component="button", key="reset_desiccant", name="Reset Desiccant", icon="mdi:restart"),
