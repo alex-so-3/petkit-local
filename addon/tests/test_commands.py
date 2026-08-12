@@ -461,3 +461,40 @@ def test_the_litter_type_seed_is_gone():
     idx = _settable_index(dev)
     _, payload = handle_ha_command(dev, idx["sand_type"], "mixed")
     assert payload["params"] == {"sandType": 3}
+
+
+# --- T6 camera pan (PTZ) ---------------------------------------------------
+
+def _t6():
+    d = Device(device_type="t6", petkit_id=6, serial_number="SN")
+    d.config.setdefault("settings", defaults.default_settings(d))
+    return d, _settable_index(d)
+
+
+def test_pan_buttons_are_run_cmd_not_thing_service():
+    """The pan buttons drive the on-device motor tool, so they resolve to a
+    `@run_cmd` shell line — never a thing/service publish (there is no cloud
+    PTZ command to send; the real-time path is Agora RTM)."""
+    from petkit_local.ha.commands import RUN_CMD_SUFFIX
+    d, idx = _t6()
+    for key, expect in (("pan_left", "steps -250"),
+                        ("pan_right", "steps 250"),
+                        ("pan_home", "coord 2500")):
+        suffix, envelope = handle_ha_command(d, idx[key], "")
+        assert suffix == RUN_CMD_SUFFIX, key
+        assert envelope == {"command": f"/system/motorctl {expect}"}, key
+
+
+def test_pan_buttons_exist_only_on_the_t6():
+    """Only the T6 has the motor, so no other litter box or feeder may offer
+    the pan buttons — they are attached by model, not by camera capability."""
+    pan = {"pan_left", "pan_right", "pan_home"}
+    for dt in ("t5", "t4", "t7", "d4h", "w7h"):
+        d = Device(device_type=dt, petkit_id=1, serial_number="SN")
+        keys = {e.key for e in get_entities_for_device(d)}
+        assert not (pan & keys), f"{dt} must not have pan buttons"
+    t6_keys = {e.key for e in get_entities_for_device(
+        Device(device_type="t6", petkit_id=1, serial_number="SN"))}
+    assert pan <= t6_keys
+    # And it stays a button, with no absolute-position number component.
+    assert "camera_pan" not in t6_keys

@@ -19,7 +19,8 @@ import logging
 from typing import TYPE_CHECKING, Any, AsyncIterable, Iterable
 
 from petkit_local.devices.ble import ble_command_for
-from petkit_local.ha.commands import Refused, handle_ha_command
+from petkit_local.ha.commands import RUN_CMD_SUFFIX, Refused, handle_ha_command
+from petkit_local.patchers.common import send_run_cmd
 from petkit_local.utils.coerce import to_int
 from petkit_local.utils.logtext import excerpt
 
@@ -249,6 +250,14 @@ class CommandRouter:
         # MQTT session, else queue for the next HTTP heartbeat poll.
         if result:
             service_suffix, mqtt_payload = result
+            # A `@run_cmd` is a shell line for the device's run_cmd path (the T6
+            # pan buttons), not a thing/service publish; send_run_cmd picks the
+            # transport itself, so it bypasses the publish/queue split below.
+            if service_suffix == RUN_CMD_SUFFIX:
+                await send_run_cmd(device, mqtt_payload["command"], self._command_sink)
+                self._registry.mark_dirty()
+                await self._publisher.publish_state(device)
+                return
             device_on_mqtt = self._command_sink is not None and device.mqtt_connected
             if device_on_mqtt:
                 try:

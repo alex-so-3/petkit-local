@@ -27,9 +27,15 @@ class FakeBridge:
     def __init__(self, connected=False):
         self._client = object() if connected else None
         self.sent = []
+        self.run_cmds = []
 
     async def publish_to_device(self, device, suffix, payload):
         self.sent.append((device.petkit_id, suffix, payload))
+
+    async def publish_user_get(self, device, payload):
+        # The transport `send_run_cmd` uses for a @run_cmd (the T6 pan buttons).
+        self.run_cmds.append((device.petkit_id, payload))
+        return True
 
 
 def _panel(reg=None, ble=None, bridge=None, cfg=None):
@@ -381,6 +387,28 @@ async def test_command_sender_uses_bridge_when_connected():
         out = await r.json()
         assert out["delivered"] == "mqtt"
         assert bridge.sent and bridge.sent[0][1] == "start"
+    finally:
+        await c.close()
+
+
+async def test_pan_button_is_delivered_as_a_run_cmd_not_a_service_publish():
+    """A T6 pan press must go out on the device's run_cmd path (user/get),
+    never as a thing/service publish — there is no cloud PTZ command, the head
+    is driven by /system/motorctl on the box itself."""
+    reg = DeviceRegistry()
+    reg.get_or_create(petkit_id=1, device_type="t6", serial_number="SN")
+    reg.get(1).mqtt_connected = True
+    bridge = FakeBridge(connected=True)
+    app, reg, hub = _panel(reg=reg, bridge=bridge)
+    c = await _mk_client(app)
+    try:
+        r = await c.post("/api/devices/1/command", data=json.dumps({"action": "pan_left"}))
+        out = await r.json()
+        assert out["delivered"] == "mqtt"
+        assert bridge.sent == [], "a pan press must not thing/service publish"
+        assert bridge.run_cmds, "a pan press must go out as a run_cmd"
+        _, payload = bridge.run_cmds[0]
+        assert payload["user_cmd"]["run_cmd"] == "/system/motorctl steps -250"
     finally:
         await c.close()
 

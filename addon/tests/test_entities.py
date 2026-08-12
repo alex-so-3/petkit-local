@@ -52,13 +52,14 @@ EXPECTED_ENTITY_COUNTS = {
     # settings this add-on had been seeding and serving to the device with no
     # control for them (pet/wander/toilet detection, voice prompt, voice DND)
     # and three buttons (Light, Power Off, Power On) — 45 -> 46 and 73 -> 82.
-    # The T6 is 83: it drops `reset_n50`, which it has no cartridge for and
-    # whose code its own app uses for Pack, and adds Pack and Open Sealed Door.
+    # The T6 is 86: it drops `reset_n50`, which it has no cartridge for and
+    # whose code its own app uses for Pack, adds Pack and Open Sealed Door, and
+    # adds the three camera-pan buttons (Left/Right/Home) that drive its motor.
     #
     # 67 -> 84 on the W7H: nine camera and voice switches (it had a camera
     # entity and no way to switch the camera off), the two drain cycles and
     # their two times, volume, voice language, and the same two power buttons.
-    "t3": 46, "t4": 46, "t5": 82, "t6": 83, "t7": 82,
+    "t3": 46, "t4": 46, "t5": 82, "t6": 86, "t7": 82,
     "feeder": 25, "feedermini": 25, "d3": 25, "d4": 25, "d4s": 25,
     "d4h": 50, "d4sh": 54,
     "w4": 24, "w5": 24, "ctw2": 24, "ctw3": 24, "w7h": 84,
