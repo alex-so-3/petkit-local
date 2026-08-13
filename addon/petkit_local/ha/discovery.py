@@ -153,10 +153,11 @@ def build_discovery_payload(
         A dict always carrying `name`, `unique_id`, `object_id`, `device`
         (identifiers/name/manufacturer/model/serial_number) and `availability`
         (topic + online/offline payloads). Read-only components additionally
-        carry `state_topic` + `value_template`; settable ones carry
-        `command_topic` plus their component-specific keys (switch payloads,
-        number step and whichever of min/max the entity declares, select
-        options, text max, event event_types); the
+        carry `state_topic` + `value_template` — except `event`, whose payload
+        must reach HA's event platform as raw JSON (see the branch below);
+        settable ones carry `command_topic` plus their component-specific keys
+        (switch payloads, number step and whichever of min/max the entity
+        declares, select options, text max, event event_types); the
         the image component replaces `state_topic` with its own
         `topic`/`image_topic`. Optional `device_class`, `unit_of_measurement`,
         `icon` and `entity_category` appear only when set on the entity —
@@ -242,10 +243,17 @@ def build_discovery_payload(
 
     elif entity.component == "event":
         # Momentary HA event entity. Reads a dedicated non-retained topic where
-        # the bridge fires {"event_type": ...} when the device reports an event.
+        # `HAPublisher.publish_event` fires {"event_type": ..., <attributes>}
+        # when the device reports an event. NO value_template: HA's event
+        # platform renders the template first and then requires the RESULT to
+        # still be a JSON object carrying `event_type` (extra keys become the
+        # event's attributes). Extracting the string here made HA reject every
+        # single event — "No valid JSON event payload detected, value after
+        # processing payload 'clean_over'" — so the entities never left
+        # `unknown` and could not trigger an automation.
+        payload.pop("value_template", None)
         payload["state_topic"] = f"petkit-local/{device_id}/event/{entity.unique_id_suffix}"
         payload["event_types"] = entity.options
-        payload["value_template"] = "{{ value_json.event_type }}"
 
     elif entity.component == "image":
         # Raw (non-base64) image bytes retained on `image_topic` — no

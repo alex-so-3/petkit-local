@@ -805,6 +805,20 @@ MQTT_TRANSPORT_TOPICS = frozenset({"property", "property_post", "data_get",
                                    "ble_relay_over"})
 
 
+def mqtt_event_names(kind: str, families: frozenset[str]) -> list[str]:
+    """Every MQTT event name of `kind` that a device in `families` emits.
+
+    This is what an HA `event` entity's `event_types` list is derived from
+    (`ha/entities/events.py`): HA silently drops a fired event_type that the
+    discovery config did not declare, so the accepted list has to be THIS
+    table filtered the same way the firing side (`normalize.entity_for_event`)
+    resolves it — a hand-maintained copy is one more parallel collection to
+    drift. Order follows the table, which groups related cycles together.
+    """
+    return [name for name, code in MQTT_EVENT_TOPICS.items()
+            if code.kind == kind and code.families & families]
+
+
 # --- NS4: RecordType media classification ----------------------------------
 # Strings the cloud record API uses to classify recorded media. Distinct from
 # our moduleType -> category mapping in events/ingest.py: this namespace comes

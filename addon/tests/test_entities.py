@@ -212,3 +212,31 @@ def test_state_topic_list_is_not_shared_between_calls():
     first = get_mqtt_state_topics(d)
     first.clear()
     assert get_mqtt_state_topics(d), "topic list must be rebuilt per call"
+
+
+def test_event_entity_options_accept_every_event_the_device_can_fire():
+    """HA silently drops a fired event_type the discovery config did not
+    declare. The firing side is `normalize.entity_for_event` (codes table ->
+    kind -> entity key); the accepting side is the entity's `options`. This
+    pins the two together: every MQTT event name that fires an entity a
+    device announces must be in that entity's list. A real T6's `light_over`
+    was dropped exactly this way — it fires `cleaning_event`, whose
+    hand-written list stopped at the cycles a T3 has."""
+    from petkit_local.events import codes
+    from petkit_local.events.normalize import KIND_TO_ENTITY
+
+    for dt in DEVICE_TYPES:
+        d = Device(device_type=dt, petkit_id=1, serial_number="SN")
+        events = {e.key: e for e in get_entities_for_device(d)
+                  if e.component == "event"}
+        for name, code in codes.MQTT_EVENT_TOPICS.items():
+            if dt not in code.families:
+                continue
+            key = KIND_TO_ENTITY.get(code.kind)
+            if key is None or key not in events:
+                # A kind no entity listens to (pet/motion/system), or an
+                # entity this category does not announce: nothing fires, so
+                # there is nothing to accept.
+                continue
+            assert name in events[key].options, (
+                f"{dt}: '{name}' fires '{key}' but its event_types omit it")

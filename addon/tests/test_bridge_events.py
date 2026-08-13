@@ -121,3 +121,25 @@ async def test_the_request_credential_never_lands_in_device_state():
     # The telemetry beside it still applies, or this would be a silent regression.
     assert device.state["sandPercent"] == 40
     assert device.state["totalTime"] == 900
+
+
+async def test_ha_event_fires_with_content_not_transport_envelope():
+    """Everything in the event payload besides `event_type` becomes an HA
+    event attribute, so the bridge hands publish_event the decoded CONTENT.
+    Passing raw `params` shipped the transport envelope — `XDevice`, the
+    signed request credential, plus the full state snapshot — into HA's
+    logbook and recorder."""
+    with tempfile.TemporaryDirectory() as tmp:
+        reg, dev, pub, store, hub, pet_registry, bridge = _setup(tmp)
+        await bridge._handle_event(dev, "clean_over", {
+            "params": {
+                "XDevice": "id=1&nonce=x&sign=y",
+                "event_id": "10000001_1785276736",
+                "timestamp": 1785276736,
+                "state": json.dumps({"sandPercent": 40}),
+                "content": json.dumps({"start_reason": 0, "result": 0}),
+            }
+        })
+        assert pub.events == [
+            (10, "cleaning_event", "clean_over", {"start_reason": 0, "result": 0}),
+        ]

@@ -35,6 +35,7 @@ from petkit_local.ha.entities.ble import get_ble_entities
 from petkit_local.ha.entities.pet import PET_SENSORS
 from petkit_local.ha.discovery import build_discovery_payload, discovery_topic
 from petkit_local.devices.state_parsers import apply_consumable_state
+from petkit_local.events.normalize import MQTT_ENVELOPE_KEYS
 from petkit_local.ha.commands import LOCAL_DEFAULTS
 from petkit_local.utils.jsonio import read_bytes
 
@@ -329,13 +330,25 @@ class HAPublisher:
 
         A retained event would re-fire on every HA restart, which for a toilet
         visit or an error would look like the thing just happened again.
+
+        HA's event platform reads the payload as a JSON object: `event_type`
+        is validated against the discovery config's `event_types`, and every
+        OTHER key becomes an attribute of the fired event, visible in the
+        logbook and stored by the recorder. So `attrs` should be the event's
+        decoded `content` (weight, error text, ...), never the raw MQTT
+        `params`: those carry the transport envelope, including `XDevice`, the
+        signed request credential. The envelope is stripped here as well —
+        same rule as merging `params` into `device.state`, enforced at the one
+        place the payload is built.
         """
         if not self._client or not self._connected:
             return
         topic = f"petkit-local/{device.petkit_id}/event/{entity_suffix}"
-        doc = {"event_type": event_type}
-        if attrs:
-            doc.update(attrs)
+        doc = {k: v for k, v in (attrs or {}).items()
+               if k not in MQTT_ENVELOPE_KEYS}
+        # Written last: a device-supplied content key named `event_type` must
+        # not override the type HA validates.
+        doc["event_type"] = event_type
         await self._emit(topic, json.dumps(doc), retain=False)
 
     async def publish_media_ready(self, device: Device, media: dict | None) -> None:
