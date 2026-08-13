@@ -212,3 +212,20 @@ def test_litter_weight_is_published_in_the_unit_the_device_reports():
     # between the two is the tell that one of them is wrong.
     _, pet = next((e, p) for e, p in _build_all(d) if e.key == "pet_weight")
     assert pet["unit_of_measurement"] == p["unit_of_measurement"]
+
+
+def test_event_entity_payload_reaches_ha_unwrapped():
+    """HA's MQTT event platform renders value_template FIRST and then requires
+    the result to still be a JSON object carrying `event_type` (extra keys
+    become the fired event's attributes). The old template here extracted the
+    bare string, so HA rejected every event — "No valid JSON event payload
+    detected, value after processing payload 'clean_over'" — and the entities
+    never left `unknown`. The publisher already sends exactly the JSON HA
+    wants, so the config must not template it at all."""
+    d = Device(device_type="t6", petkit_id=7, serial_number="SN")
+    events = [(e, p) for e, p in _build_all(d) if e.component == "event"]
+    assert events, "a T6 announces event entities"
+    for e, p in events:
+        assert "value_template" not in p
+        assert p["state_topic"] == f"petkit-local/7/event/{e.unique_id_suffix}"
+        assert p["event_types"] == e.options

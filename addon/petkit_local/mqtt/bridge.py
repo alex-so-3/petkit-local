@@ -510,10 +510,15 @@ class MQTTBridge:
                     await self._ha_publisher.publish_pet_discovery(pet)
                     await self._ha_publisher.publish_pet_state(pet, self._event_store)
 
-        # Fire the matching HA event entity (momentary).
+        # Fire the matching HA event entity (momentary). `content`, not
+        # `params`: everything in the payload besides `event_type` becomes an
+        # attribute of the HA event, and `params` is the transport envelope —
+        # `XDevice` (the signed request credential) and the full state
+        # snapshot have no business in HA's logbook. The HTTP path
+        # (http/handlers/stubs.py) passes the same decoded content.
         entity_suffix = entity_for_event(event_type, device.device_type)
         if entity_suffix and self._ha_publisher:
-            await self._ha_publisher.publish_event(device, entity_suffix, event_type, params)
+            await self._ha_publisher.publish_event(device, entity_suffix, event_type, content)
 
         if self._ha_publisher:
             await self._ha_publisher.publish_state(device)
