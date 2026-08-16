@@ -28,6 +28,7 @@ from petkit_local.media.crypto import resolve_key_string
 from petkit_local.media.go2rtc import Go2rtc
 from petkit_local.media.retention import RetentionConfig
 from petkit_local.mqtt.bridge import MQTTBridge
+from petkit_local.mqtt.ble_relay import update_linked_k3
 from petkit_local.mqtt.upstream import (
     CREDENTIALS_FILENAME, UpstreamCredentials, UpstreamMQTT,
 )
@@ -124,8 +125,17 @@ class _LocalRepublisher:
             await client.publish(topic, payload)
 
 
-async def _on_state_report(ha_publisher: HAPublisher, device: Device, body: dict) -> None:
-    """Mirror a freshly parsed state report into HA.
+async def _on_state_report(ha_publisher: HAPublisher, ble_registry: BLERegistry | None,
+                           device: Device, body: dict) -> None:
+    """Mirror a freshly parsed state report into HA — parent AND any linked K3.
+
+    On an unpatched ESP32 (T4, D4, D3) the device only ever HTTP-heartbeats,
+    so its property/post never reaches the MQTT bridge and the K3 piggyback
+    lift on that path is a no-op. `dev_state_report` carries the identical
+    top-level `battery`/`liquid`/`k3Id` keys, so extracting them here is the
+    HTTP-side twin of `mqtt/bridge.py`'s property/post branch — mirrors the
+    "ONE helper called from BOTH transports" rule the feeder parser already
+    follows.
 
     Only installed when HA publishing is enabled; the HTTP handler
     treats a missing hook as "nothing to notify", so no other code
@@ -133,6 +143,10 @@ async def _on_state_report(ha_publisher: HAPublisher, device: Device, body: dict
     """
     await ha_publisher.publish_state(device)
     await ha_publisher.publish_availability(device)
+    k3 = update_linked_k3(device, body, ble_registry)
+    if k3:
+        await ha_publisher.publish_ble_discovery(k3)
+        await ha_publisher.publish_ble_state(k3)
 
 
 async def _on_signup(ha_publisher: HAPublisher | None, device: Device) -> None:
@@ -237,7 +251,7 @@ def build_services(config: Config, args: argparse.Namespace) -> Services:
     app[BACKGROUND_TASKS] = []
 
     if ha_publisher:
-        app["on_state_report"] = partial(_on_state_report, ha_publisher)
+        app["on_state_report"] = partial(_on_state_report, ha_publisher, ble_registry)
 
     app["on_signup"] = partial(_on_signup, ha_publisher)
     app["on_device_seen"] = partial(_on_device_seen, ha_publisher)
