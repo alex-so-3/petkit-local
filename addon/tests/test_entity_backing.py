@@ -166,6 +166,13 @@ PASSTHROUGH_ATTESTED = {
     "bowl": "D4SH 867 ctrl 'recv feed start leftover set(-1)'; both reports in issue #2",
     "feeding": "D4SH 867 ctrl state builder; both reports in issue #2",
     "eating": "D4SH 867 ctrl state builder; both reports in issue #2",
+    # D4H (YumShare Solo). Settled the question the D4SH rows above left open:
+    # a single-hopper next-gen feeder sends the SINGULAR `food`, not `food1`.
+    # Observed on a live D4H (fw 867): steady 2 with a full hopper, 0 when
+    # nothing is detected (transiently during a dispense, for real when empty)
+    # -- which is also why `food_low` reads the derived `foodLow`, never the
+    # raw value (see state_parsers._derive_food_low).
+    "food": "live D4H 867 state reports: steady 2 full, 0 empty/dispensing",
     # Values whose PRESENCE is settled and whose meaning is not. That is a fine
     # reason to publish -- an owner can watch a number move -- and no reason at
     # all to name it something, which is why each of these entities carries the
@@ -198,11 +205,11 @@ PASSTHROUGH_UNVERIFIED = {
     "filterLeftDays", "lackWarning", "heatRealTemp", "drinkTime",
     "desiccantLeftDays", "batteryPower",
     # `bowl`, `feeding` and `eating` graduated to PASSTHROUGH_ATTESTED once a
-    # real D4SH sent all three. `food` and `weight` did not, and they are the
-    # interesting half: the same two reports carry `food1`/`food2` and no
-    # `food`, no `weight`. So these stay the reference integration's cloud-model
-    # names, and both are now excluded on the models we can actually check.
-    "food", "weight",
+    # real D4SH sent all three, and `food` followed when a live D4H did. That
+    # leaves `weight`: the same D4SH reports carry `food1`/`food2` and no
+    # `weight`, and no feeder has sent one -- so it stays the reference
+    # integration's cloud-model name, excluded on the models we can check.
+    "weight",
     "liquid", "battery", "temp",
 }
 
@@ -251,6 +258,7 @@ _SHARED_HELPERS = (
     state_parsers._extract_camel, state_parsers._extract_litter_nested,
     state_parsers._extract_consumable_days, state_parsers._extract_shared,
     state_parsers._extract_presence_flags, state_parsers._extract_error_flags,
+    state_parsers._derive_food_low,
     state_parsers._extract_fountain_w7h,
     state_parsers._extract_wifi_rssi, state_parsers._extract_work_mode,
     state_parsers._parse_content_field, state_parsers.normalize_property_params,

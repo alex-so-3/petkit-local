@@ -225,8 +225,12 @@ FEEDER_SENSORS = [
 ]
 
 FEEDER_BINARY_SENSORS = [
+    # `state.foodLow` is DERIVED (`state_parsers._derive_food_low`), never the
+    # raw `food`: `food` is presence -- a live D4H (fw 867) holds a steady 2
+    # with a full hopper -- and discovery's generic truthy-is-ON template read
+    # that as the problem being present, so a full hopper showed as Food Low.
     EntityDef(component="binary_sensor", key="food_low", name="Food Low",
-              value_path="state.food", device_class="problem", icon="mdi:food-drumstick-off"),
+              value_path="state.foodLow", device_class="problem", icon="mdi:food-drumstick-off"),
     EntityDef(component="binary_sensor", key="feeding", name="Feeding",
               value_path="state.feeding", device_class="running", icon="mdi:food"),
     EntityDef(component="binary_sensor", key="eating", name="Eating",
@@ -248,9 +252,9 @@ FEEDER_BINARY_SENSORS = [
 #: They must be a separate list, not shared-and-excluded: `model_excludes` filters
 #: only the family base, NOT `model_entities`, so excluding `hopper2_level` for a
 #: D4H (as the code used to) never actually removed it. A single-hopper feeder
-#: must simply not be GIVEN these — see `ha/categories.py`. A D4H is ASSUMED to
-#: report the singular `food` instead (shown by the family `food_low`); that is
-#: inference from the cloud model, unverified until a D4H is captured.
+#: must simply not be GIVEN these — see `ha/categories.py`. A D4H reports the
+#: singular `food` instead — CONFIRMED on a live D4H (fw 867): steady 2 with a
+#: full hopper, 0 when nothing is detected.
 #:
 #: 2 = has food and 0 = empty, reported by the D4SH owner, who never saw 1 in
 #: between. So this is not a percentage, and it is not a two-state either until
@@ -270,9 +274,10 @@ FEEDER_DUAL_HOPPER_SENSORS = [
 #: the dual `hopper1_level` with the "1" dropped and pointed at the singular
 #: `state.food` the rest of the feeder family uses.
 #:
-#: GUESSED: no D4H has ever reported here, so whether it sends `food` (like the
-#: single-hopper cloud model) or `food1` (like the D4SH it shares a `ctrl` with)
-#: is unverified. This bets on `food`. Same 0/2 enum as the dual sensors above.
+#: CONFIRMED on a live D4H (fw 867): it sends the singular `food` (like the
+#: single-hopper cloud model), not `food1` (like the D4SH it shares a `ctrl`
+#: with) — steady 2 with a full hopper, 0 when nothing is detected. Same 0/2
+#: enum as the dual sensors above.
 FEEDER_SINGLE_HOPPER_SENSORS = [
     EntityDef(component="sensor", key="hopper_level", name="Hopper",
               value_path="state.food", icon="mdi:silo",

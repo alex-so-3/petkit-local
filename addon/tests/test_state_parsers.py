@@ -386,6 +386,20 @@ def test_an_esp32_feeder_is_not_given_fields_its_hardware_never_sends():
         assert key not in flat, key
 
 
+def test_food_low_is_derived_from_presence_not_truthiness():
+    """`food` is presence: a live D4H (fw 867) holds a steady 2 with a FULL
+    hopper and reports 0 only when nothing is detected. The Food Low problem
+    sensor used to read the raw value through discovery's generic truthy-is-ON
+    template, so a full hopper read as Food Low ON — backwards. It now reads
+    the derived `foodLow`, which is 1 exactly when the device says empty."""
+    assert parse_state_report("d4h", {"food": 2})["foodLow"] == 0
+    assert parse_state_report("d4h", {"food": 0})["foodLow"] == 1
+    # No `food`, no verdict: a D4SH reports `food1`/`food2` and no singular
+    # `food`, so nothing may invent a flag for it — absence stays absent.
+    assert "foodLow" not in parse_state_report("d4sh", D4SH_STATE)
+    assert "foodLow" not in normalize_property_params("d4sh", D4SH_STATE)
+
+
 def test_the_device_ip_still_comes_out_of_the_other_string():
     """Everything downstream of the camera needs it — the stream URL and the
     whole Patchers tab go quiet without one."""
