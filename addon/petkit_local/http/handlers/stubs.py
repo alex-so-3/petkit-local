@@ -32,6 +32,7 @@ from petkit_local.events.ingest import (
 from petkit_local.http.handlers._common import (
     device_id, no_device_response, request_device,
 )
+from petkit_local.mqtt.ble_relay import update_linked_k3
 from petkit_local.media.crypto import resolve_key_string as _get_aes_key
 from petkit_local.utils.capture import capture_record
 from petkit_local.web.api.sounds import sound_list_for_device
@@ -234,6 +235,14 @@ async def handle_event_report(request: web.Request) -> web.Response:
             await ha_publisher.publish_event(device, entity_suffix, row["event_type"], content)
         await ha_publisher.publish_state(device)
         await ha_publisher.publish_availability(device)
+        # Every event report from a T4 carries `battery`/`liquid`/`k3Id` in
+        # its embedded state — the ESP32's HTTP twin of the MQTT property/post
+        # piggyback. See `mqtt.ble_relay.update_linked_k3`.
+        if isinstance(state, dict):
+            k3 = update_linked_k3(device, state, request.app.get("ble_registry"))
+            if k3:
+                await ha_publisher.publish_ble_discovery(k3)
+                await ha_publisher.publish_ble_state(k3)
 
     return web.json_response({"result": "success"})
 

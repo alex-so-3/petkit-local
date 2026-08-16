@@ -40,6 +40,45 @@ log = logging.getLogger(__name__)
 BLE_SESSION_HOLD_SECONDS = 30
 
 
+def update_linked_k3(device: "Device", params: dict,
+                     ble_registry: "BLERegistry | None") -> "BLEDevice | None":
+    """Merge K3 consumable fields piggybacked on the parent's state report.
+
+    Transport-agnostic: the K3 spray is BLE-only and never posts anything of
+    its own, so its `battery` and `liquid` ride along on the parent litter
+    box's continuous state — MQTT `property/post`, HTTP `dev_state_report`,
+    and the embedded `state` block of every `dev_event_report`. All three
+    carry the same top-level keys, so ONE extractor covers every transport,
+    for the reason `_extract_feeder_next_gen` records: a mapping added to
+    only one of them works on whichever frames happen to carry it and
+    silently does nothing on the other.
+
+    Returns:
+        The K3 BLEDevice if anything changed (the caller re-publishes it to
+        HA), else None.
+    """
+    if not ble_registry:
+        return None
+    k3 = ble_registry.get_linked_k3(device.petkit_id)
+    if not k3:
+        return None
+
+    updated = False
+    if "battery" in params:
+        k3.state.setdefault("consumables", {})["battery"] = params["battery"]
+        updated = True
+    if "liquid" in params:
+        k3.state.setdefault("consumables", {})["liquid"] = params["liquid"]
+        updated = True
+
+    if not updated:
+        return None
+    ble_registry.mark_dirty()
+    log.info("Updated K3 (id=%d) from parent device %d: battery=%s liquid=%s",
+             k3.petkit_id, device.petkit_id,
+             params.get("battery", "?"), params.get("liquid", "?"))
+    return k3
+
 class BLERelay:
     """Reads and writes BLE accessories through their parent's MQTT session.
 
@@ -246,36 +285,11 @@ class BLERelay:
     def _update_linked_k3(self, device: Device, params: dict) -> BLEDevice | None:
         """Merge K3 consumable fields piggybacked on the parent's property post.
 
-        The K3 spray is BLE-only and never posts anything itself: its
-        battery and liquid level ride along in the parent litter box's own
-        property post, which is why they are picked out here rather than in
-        `_handle_ble_response`.
-
-        Returns:
-            The K3 BLEDevice if anything changed (the caller re-publishes it to
-            HA), else None.
+        Thin wrapper around :func:`update_linked_k3` — every transport now
+        reaches the same helper, this is only kept for the MQTT call site's
+        readability. See the free function for the full contract.
         """
-        if not self._ble_registry:
-            return None
-        k3 = self._ble_registry.get_linked_k3(device.petkit_id)
-        if not k3:
-            return None
-
-        updated = False
-        if "battery" in params:
-            k3.state.setdefault("consumables", {})["battery"] = params["battery"]
-            updated = True
-        if "liquid" in params:
-            k3.state.setdefault("consumables", {})["liquid"] = params["liquid"]
-            updated = True
-
-        if not updated:
-            return None
-        self._ble_registry.mark_dirty()
-        log.info("Updated K3 (id=%d) from parent device %d: battery=%s liquid=%s",
-                 k3.petkit_id, device.petkit_id,
-                 params.get("battery", "?"), params.get("liquid", "?"))
-        return k3
+        return update_linked_k3(device, params, self._ble_registry)
 
     async def _handle_ble_response(self, device: Device, params: dict) -> None:
         """Apply one relayed BLE frame to the accessory it came from.
