@@ -160,6 +160,29 @@ def _extract_feeder_next_gen(body: dict[str, Any], state: dict[str, Any],
     _extract_sensor_block(body, state, FEEDER_HALLS)
 
 
+def _derive_food_low(state: dict[str, Any]) -> None:
+    """Turn the hopper-presence `food` into an explicit `foodLow` 0/1.
+
+    `food` is presence of food in the hopper, not a shortage flag: a live D4H
+    (fw 867) holds a steady 2 with a FULL hopper and reports 0 only when
+    nothing is detected -- transiently while food moves through during a
+    dispense, and for real once the hopper runs out. The shared "Food Low"
+    binary sensor used to read `food` through discovery's generic
+    truthy-is-ON template (`ha/discovery.py::_value_template`), so a full
+    hopper read as Food Low ON -- backwards. Deriving the flag here keeps the
+    raw `food` for the Hopper enum sensor and gives the problem sensor a
+    value that is 1 exactly when the device says nothing is there.
+
+    Gated on presence, the module's standing rule: a model that never sends
+    `food` (a D4SH says `food1`/`food2`) derives nothing. ONE helper called
+    from BOTH transports, for the reason spelled out on
+    `_extract_feeder_next_gen` -- today no MQTT table carries a singular
+    `food`, so the property/post call site is armed but idle until one does.
+    """
+    if "food" in state:
+        state["foodLow"] = 1 if to_float(state.get("food"), 2) == 0 else 0
+
+
 def _extract_presence_flags(body: dict[str, Any], state: dict[str, Any]) -> None:
     """Turn the presence-signalled fields into 0/1 in `state`.
 
@@ -491,6 +514,9 @@ def _parse_feeder(body: dict[str, Any], device_type: str = "") -> dict[str, Any]
     # Error sensor reads whatever the last transport to arrive had to say --
     # exactly the asymmetry this module's docstring calls the standard bug.
     _extract_error_flags(body, state, device_type)
+    # Explicit Food Low, derived from `food` presence -- see _derive_food_low
+    # for why the raw value cannot back a problem sensor directly.
+    _derive_food_low(state)
 
     feed_state = dig(body, "feedState", default=dig(body, "feed_state", default={}))
     if isinstance(feed_state, dict) and feed_state:
@@ -626,6 +652,7 @@ def normalize_property_params(device_type: str, params: dict[str, Any]) -> dict[
 
     _extract_fountain_w7h(params, flat, device_type)
     _extract_feeder_next_gen(params, flat, device_type)
+    _derive_food_low(flat)
     if device_type.lower() in LITTER_CAMERA_MODELS:
         _extract_sensor_block(params, flat, LITTER_CAMERA_HALLS)
 
