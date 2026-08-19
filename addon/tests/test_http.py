@@ -91,6 +91,37 @@ async def test_full_boot_sequence():
         await client.close()
 
 
+async def test_state_report_time_carries_the_devices_offset():
+    """`dev_state_report`'s `time` is where the firmware reads its timezone and
+    sets the RTC its scheduled feeds fire against. A UTC `+0000` here on a
+    UTC+2 box fires every meal two hours late, so the device's own offset — a
+    +5.5 override here — must be stamped on the wire, not UTC."""
+    reg = DeviceRegistry()
+    client = await _client(reg)
+    try:
+        await client.post("/6/t5/dev_signup", headers=HDR)
+        reg.get(100).config["timezone"] = 5.5  # override wins in timezone_offset
+        r = await client.post("/6/t5/dev_state_report", headers=HDR,
+                              data=json.dumps({"workState": 1}))
+        t = (await r.json())["result"]["time"]
+        assert t.endswith("+0530"), t
+    finally:
+        await client.close()
+
+
+async def test_state_report_time_is_utc_for_an_unidentified_device():
+    """No Device to speak an offset for -> the historical UTC `+0000`, never a
+    guess. The `/{path:.*}` catch-all still answers, so this must not raise."""
+    reg = DeviceRegistry()
+    client = await _client(reg)
+    try:
+        r = await client.post("/6/t5/dev_state_report", headers=HDR,
+                              data=json.dumps({"workState": 1}))
+        assert (await r.json())["result"]["time"].endswith("+0000")
+    finally:
+        await client.close()
+
+
 # --- a device that puts its identity in the body ----------------------------
 #
 # The Ingenic models send `X-Device: id=...&sn=...` on every request. An ESP32

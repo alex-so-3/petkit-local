@@ -150,6 +150,12 @@ async def handle_state_report(request: web.Request) -> web.Response:
             # visible regression. Events carry a state snapshot of their own,
             # so the cloud can afford to be quiet and we cannot.
             "interval": 30,
-            "time": cloud_timestamp(),
+            # LOCAL time with the device's own offset, not UTC: the firmware
+            # takes its timezone from this field and sets the RTC its scheduled
+            # feeds fire against, so `+0000` here fires every meal two hours late
+            # on a UTC+2 box (cloud_timestamp). An unidentified device (no offset
+            # to speak for) falls back to UTC.
+            "time": cloud_timestamp(
+                offset_hours=device.timezone_offset if device else None),
         }
     })

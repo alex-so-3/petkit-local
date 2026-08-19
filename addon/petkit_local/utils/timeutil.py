@@ -27,16 +27,32 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 DATE_FORMAT = "%Y-%m-%d"
 
 
-def cloud_timestamp(when: float | None = None) -> str:
-    """A UTC instant in the format PetKit's cloud puts on the wire.
+def cloud_timestamp(when: float | None = None,
+                    offset_hours: float | None = None) -> str:
+    """An instant in the format PetKit's cloud puts on the wire, at an offset.
 
-    `2026-07-15T05:19:42.000+0000` — milliseconds, and a `+0000` offset with no
-    colon. NOT `datetime.isoformat()`, which produces `+00:00` and would be a
-    different string to whatever parses it on the device. Confirmed against
-    captured `dev_state_report` and `dev_schedule_get` replies.
+    `2026-08-19T15:45:51.170+0200` — milliseconds, and a `+HHMM` offset with no
+    colon. NOT `datetime.isoformat()`, which produces `+02:00` and would be a
+    different string to whatever parses it on the device.
+
+    `offset_hours` is the UTC offset to render the instant AT — the device's own
+    (`Device.timezone_offset`). It is NOT cosmetic. `dev_state_report`'s reply is
+    where the firmware reads its timezone: it parses this `time`, extracts the
+    offset (`get_ctime_timezone`) and sets its RTC from it, and its scheduled
+    feeds fire against that RTC. Confirmed on a live D4H2 — the real cloud
+    answered `+0200` and a meal fired on the wall-clock minute, while our own
+    `+0000` set the box to UTC and fired every meal two hours late. The stored
+    epoch is still UTC (this codebase changes nothing there); only the wire
+    string is localized. Rounded to whole minutes so the offset is always the
+    `+HHMM` the device reads, never a sub-minute `%z` variant.
+
+    Omitted (or None) keeps the historical UTC/`+0000`, for a caller with no
+    device to speak for — an unidentified device is the only one left.
     """
-    now = datetime.fromtimestamp(when, timezone.utc) if when is not None \
-        else datetime.now(timezone.utc)
+    tz = timezone.utc if offset_hours is None \
+        else timezone(timedelta(minutes=round(offset_hours * 60)))
+    now = datetime.fromtimestamp(when, tz) if when is not None \
+        else datetime.now(tz)
     return (now.strftime("%Y-%m-%dT%H:%M:%S.")
             + f"{now.microsecond // 1000:03d}"
             + now.strftime("%z"))
