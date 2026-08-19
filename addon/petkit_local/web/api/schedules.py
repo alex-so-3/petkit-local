@@ -19,6 +19,7 @@ from petkit_local.devices.base import encode_multi_range
 from petkit_local.ha.commands import PROPERTY_SET_SUFFIX, make_mqtt_property_set
 from petkit_local.http.handlers.feed import _build_latest, _compute_next_tick
 from petkit_local.utils.coerce import to_int
+from petkit_local.utils.const import DEVICE_TYPES_FEEDER_DUAL
 from petkit_local.web.api._common import _deliver, _device_or_404, _json_body
 
 
@@ -128,15 +129,48 @@ def _clean_point_list(value: Any) -> list[dict[str, Any]] | None:
     return cleaned
 
 
-def _clean_feed_schedule(value: Any) -> dict[str, Any] | None:
+def _clean_meal_amounts(meal: dict, dual: bool) -> dict[str, Any] | None:
+    """A meal's dispensed amount, validated, in the model's own shape.
+
+    A Dual-Hopper carries `a1`/`a2`, one per hopper (`a2` defaults 0); a
+    single-hopper D4H/D4H2 carries a lone `a`, which is the field its
+    `pk_schmg_parse_schedule` reads — sent `a1`/`a2` it dispenses nothing
+    (`err_code: 8`, the mirror of the Dual-Hopper's issue #2). Which key a
+    feeder reads is per model, exactly as `feed_realtime` is (`ha/commands.py::
+    _feed`), and the two amounts never convert: `a` is the device's own unit,
+    not the portions a hopper counts.
+
+    For a single hopper a legacy `a1` is accepted as `a` — a schedule the
+    dual-only editor saved before this split is read, not silently emptied —
+    but never the other way. All are a single byte on the device, so 0..255.
+    """
+    if dual:
+        first = to_int(meal.get("a1"), None)
+        second = to_int(meal.get("a2"), 0)
+        if first is None or second is None:
+            return None
+        if not (0 <= first <= 255 and 0 <= second <= 255):
+            return None
+        return {"a1": first, "a2": second}
+    amount = to_int(meal.get("a"), None)
+    if amount is None:
+        amount = to_int(meal.get("a1"), None)  # legacy dual-only editor save
+    if amount is None or not 0 <= amount <= 255:
+        return None
+    return {"a": amount}
+
+
+def _clean_feed_schedule(value: Any, dual: bool) -> dict[str, Any] | None:
     """`{schedule: [{re, it, itemJsonString}], nextTick, latest}` — the feeder's.
 
     The shape comes from a D4SH 867 `ctrl` (`pk_schmg_parse_schedule`), which
-    reads `re` and `it` per group and `id`/`t`/`a1`/`a2` per meal; see
-    `events/codes.py::FEED_SCHEDULE_ITEM_KEYS`. Unlike every other schedule
-    here, a meal's `t` counts SECONDS since local midnight — the cloud's
-    `n_46560` fires at 12:56:00 (D4SH capture, 2026-08-12) — and the id is the
-    cloud's `n_<seconds>` scheme, regenerated whenever a client sends an int.
+    reads `re` and `it` per group and `id`/`t` per meal, then the amount in the
+    model's own key: `a1`/`a2` on a Dual-Hopper, a lone `a` on the single-hopper
+    D4H/D4H2 (`dual` selects which; see `events/codes.py::FEED_SCHEDULE_ITEM_KEYS`
+    and `_clean_meal_amounts`). Unlike every other schedule here, a meal's `t`
+    counts SECONDS since local midnight — the cloud's `n_46560` fires at 12:56:00
+    (D4SH capture, 2026-08-12) — and the id is the cloud's `n_<seconds>` scheme,
+    regenerated whenever a client sends an int.
 
     `itemJsonString` is rebuilt from `it` rather than trusted: the real cloud
     sends both, they are the same list twice, and two copies of one value in one
@@ -169,19 +203,15 @@ def _clean_feed_schedule(value: Any) -> dict[str, Any] | None:
             if not isinstance(meal, dict):
                 return None
             second_of_day = to_int(meal.get("t"), None)
-            first = to_int(meal.get("a1"), None)
-            second = to_int(meal.get("a2"), 0)
-            if second_of_day is None or first is None or second is None:
+            if second_of_day is None or not 0 <= second_of_day < DAY_SECONDS:
                 return None
-            if not 0 <= second_of_day < DAY_SECONDS:
-                return None
-            if not (0 <= first <= 255 and 0 <= second <= 255):
+            amounts = _clean_meal_amounts(meal, dual)
+            if amounts is None:
                 return None
             raw_id = meal.get("id")
             if not isinstance(raw_id, str) or not raw_id:
                 raw_id = f"n_{second_of_day}"
-            meals.append(
-                {"id": raw_id, "t": second_of_day, "a1": first, "a2": second})
+            meals.append({"id": raw_id, "t": second_of_day, **amounts})
 
         groups.append({
             "re": ",".join(str(d) for d in sorted(set(days))),
@@ -231,7 +261,8 @@ async def api_save_schedule(request: web.Request) -> web.Response:
     raw = body.get("value")
 
     if kind == "feed":
-        feed = _clean_feed_schedule(raw)
+        dual = d.device_type.lower() in DEVICE_TYPES_FEEDER_DUAL
+        feed = _clean_feed_schedule(raw, dual)
         if feed is None:
             return web.json_response({"error": "not a valid feeding schedule"}, status=400)
         d.config["feed_schedule"] = feed
@@ -274,8 +305,10 @@ async def api_deferred_feed(request: web.Request) -> web.Response:
     """Add or list deferred (one-off) feeds for a feeder.
 
     POST ``{"date": "2026-08-13", "time": "17:05", "a1": 0, "a2": 1}``
-    adds a deferred feed. GET lists pending ones. DELETE with ``{sound_id}``
-    in path removes one.
+    (Dual-Hopper) or ``{..., "a": 20}`` (single-hopper D4H/D4H2) adds a deferred
+    feed. GET lists pending ones. DELETE with ``{sound_id}`` in path removes one.
+    The amount is stored in the model's own key so the feed actually dispenses
+    (`_clean_meal_amounts`); a legacy `a1` is read as `a` on a single hopper.
 
     The device picks this up on its next ``dev_feed_get`` poll, which the
     heartbeat ``feed_get:1`` command triggers immediately.
@@ -306,8 +339,10 @@ async def api_deferred_feed(request: web.Request) -> web.Response:
     body = await _json_body(request)
     date_str = body.get("date", "")
     time_str = body.get("time", "")
-    a1 = to_int(body.get("a1"), 0)
-    a2 = to_int(body.get("a2"), 0)
+    if d.device_type.lower() in DEVICE_TYPES_FEEDER_DUAL:
+        amounts = {"a1": to_int(body.get("a1"), 0), "a2": to_int(body.get("a2"), 0)}
+    else:
+        amounts = {"a": to_int(body.get("a", body.get("a1")), 0)}
 
     try:
         dt = datetime.datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
@@ -323,7 +358,7 @@ async def api_deferred_feed(request: web.Request) -> web.Response:
     secs_since_midnight = dt.hour * 3600 + dt.minute * 60 + dt.second
     feed_id = f"d_{dt.strftime('%Y%m%d')}_{secs_since_midnight}"
 
-    entry = {"id": feed_id, "a1": a1, "a2": a2, "fire_at": fire_at}
+    entry = {"id": feed_id, **amounts, "fire_at": fire_at}
     deferred.append(entry)
     reg.save()
 

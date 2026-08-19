@@ -10,6 +10,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from petkit_local.devices.registry import DeviceRegistry
 from petkit_local.http.handlers.feed import (
+    _amount_fields,
     _build_latest,
     _compute_next_tick,
     migrate_minute_schedule,
@@ -98,6 +99,80 @@ def test_todays_own_passed_meal_is_excluded(warsaw_tz):
         {"re": "4", "it": [{"id": "n_60540", "t": 60540, "a1": 1, "a2": 0}]},
     ], "v": 2}
     assert _build_latest(feed, CAPTURE_TS) == []
+
+
+# --- single-hopper (D4H/D4H2) amount shape ----------------------------------
+# A single-hopper feeder's meal carries one `a`, not the Dual-Hopper's a1/a2.
+# The firmware fires from latest[], so latest must repeat `a`: a D4H handed
+# a1/a2 runs the feed cycle and dispenses nothing (real_amount 0, err_code 8 —
+# codes.FEED_RESULT[8], the mirror of the Dual-Hopper's issue #2).
+
+def test_amount_fields_preserves_the_model_shape():
+    assert _amount_fields({"a": 20}) == {"a": 20}
+    assert _amount_fields({"a1": 1, "a2": 6}) == {"a1": 1, "a2": 6}
+    assert _amount_fields({}) == {"a1": 0, "a2": 0}
+    # `a` is the single-hopper key and wins when a payload carries both.
+    assert _amount_fields({"a": 5, "a1": 9, "a2": 9}) == {"a": 5}
+
+
+def test_single_hopper_meal_carries_a_into_latest():
+    """The D4H2 bug: a meal with only `a` must reach latest[] as `a`, never
+    downgraded to a1/a2. This is the deterministic form of the live check —
+    'does latest now carry a:20 at fire time'."""
+    now = time.time()
+    lt = time.localtime(now)
+    secs = lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec
+    future_t = (secs + 7200) % 86400
+    feed = {"schedule": [{"re": "1,2,3,4,5,6,7", "it": [
+        {"id": f"n_{future_t}", "t": future_t, "a": 20},
+    ]}], "v": 2}
+    latest = _build_latest(feed, now)
+    assert latest, "an all-week meal 2h out must appear"
+    assert all(e["a"] == 20 and "a1" not in e and "a2" not in e for e in latest)
+    assert latest[0]["id"].startswith("s_")
+    assert 7100 < latest[0]["t"] < 7300
+
+
+def test_single_hopper_deferred_carries_a():
+    now = time.time()
+    feed = {
+        "schedule": [{"re": "1,2,3,4,5,6,7", "it": []}],
+        "deferred": [{"id": "d_20260819_43200", "a": 20, "fire_at": now + 3600}],
+        "v": 2,
+    }
+    d_entries = [e for e in _build_latest(feed, now) if e["id"].startswith("d_")]
+    assert len(d_entries) == 1
+    assert d_entries[0]["a"] == 20
+    assert "a1" not in d_entries[0] and "a2" not in d_entries[0]
+
+
+async def test_http_serves_single_hopper_a_end_to_end():
+    """What a D4H2 receives on its dev_feed_get poll: schedule[].it[] keeps `a`,
+    itemJsonString echoes it, and the recomputed latest[] carries `a` — the
+    thing that was zeroed to a1/a2 and made the feed dispense nothing."""
+    app, reg = _app(device_type="d4h")
+    d = reg.get(1)
+    now = time.time()
+    lt = time.localtime(now)
+    secs = lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec
+    future_t = (secs + 7200) % 86400
+    d.config["feed_schedule"] = {
+        "schedule": [{"re": "1,2,3,4,5,6,7", "it": [
+            {"id": f"n_{future_t}", "t": future_t, "a": 20},
+        ]}],
+        "v": 2,
+    }
+    async with TestClient(TestServer(app)) as c:
+        r = await c.get(
+            "/6/d4h/dev_feed_get",
+            headers={"X-Device": "id=1&nonce=x&timestamp=1&type=d4h&sign=x"})
+        result = (await r.json())["result"]
+        meal = result["schedule"][0]["it"][0]
+        assert meal == {"id": f"n_{future_t}", "t": future_t, "a": 20}
+        assert result["schedule"][0]["itemJsonString"] == \
+            f'[{{"a":20,"id":"n_{future_t}","t":{future_t}}}]'
+        assert result["latest"]
+        assert all(e["a"] == 20 and "a1" not in e for e in result["latest"])
 
 
 # --- serve-time behaviour ----------------------------------------------------

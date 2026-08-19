@@ -9,6 +9,7 @@ times, told apart only by `type`, so an editor that rewrites its own section has
 to keep the other one.
 """
 import json
+import time
 
 import pytest
 
@@ -525,6 +526,87 @@ async def test_a_feeding_schedule_keeps_the_devices_own_bookkeeping():
 ])
 async def test_a_malformed_feeding_schedule_is_refused(bad):
     app, reg, bridge = _panel("d4sh")
+    c = await _client(app)
+    try:
+        status, _ = await _save(c, "feed_schedule", bad)
+        assert status == 400
+        assert "feed_schedule" not in reg.get(1).config
+    finally:
+        await c.close()
+
+
+# --- the single-hopper feeder (D4H/D4H2) ------------------------------------
+# A single hopper's `pk_schmg_parse_schedule` reads one `a` per meal, not the
+# Dual-Hopper's a1/a2 (events/codes.py::FEED_SCHEDULE_ITEM_KEYS). Sent a1/a2 it
+# runs the feed and dispenses nothing (err_code 8). So on a D4H the stored meal,
+# the itemJsonString and the pushed latest must all carry `a`.
+
+async def test_a_single_hopper_schedule_is_stored_and_pushed_with_a():
+    app, reg, bridge = _panel("d4h")
+    c = await _client(app)
+    try:
+        now = time.time()
+        lt = time.localtime(now)
+        secs = lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec
+        future_t = (secs + 7200) % 86400
+        status, _ = await _save(c, "feed_schedule", {"schedule": [
+            {"re": "1,2,3,4,5,6,7", "it": [{"id": 1, "t": future_t, "a": 20}]},
+        ]})
+        assert status == 200
+
+        group = reg.get(1).config["feed_schedule"]["schedule"][0]
+        assert sorted(group["it"][0]) == ["a", "id", "t"]
+        assert group["it"][0]["a"] == 20
+        assert json.loads(group["itemJsonString"]) == group["it"]
+        assert '"a":20' in group["itemJsonString"]
+
+        _did, suffix, envelope = bridge.sent[0]
+        assert suffix == "property/set"
+        wire = json.loads(envelope["params"]["feed"])
+        assert wire["latest"]
+        assert all(e["a"] == 20 and "a1" not in e for e in wire["latest"])
+    finally:
+        await c.close()
+
+
+async def test_a_single_hopper_meal_migrates_a_legacy_a1_to_a():
+    """A schedule the dual-only editor saved carries a1; on a single hopper it
+    is read as `a` rather than silently emptied — but never the other way."""
+    app, reg, bridge = _panel("d4h")
+    c = await _client(app)
+    try:
+        status, _ = await _save(c, "feed_schedule", {"schedule": [
+            {"re": "1", "it": [{"id": 1, "t": 510, "a1": 3}]},
+        ]})
+        assert status == 200
+        meal = reg.get(1).config["feed_schedule"]["schedule"][0]["it"][0]
+        assert meal == {"id": "n_510", "t": 510, "a": 3}
+    finally:
+        await c.close()
+
+
+async def test_a_single_hopper_deferred_feed_stores_a():
+    app, reg, bridge = _panel("d4h")
+    c = await _client(app)
+    try:
+        r = await c.post("/api/devices/1/deferred-feed",
+                         data=json.dumps({"date": "2099-06-01", "time": "12:00", "a": 20}))
+        assert r.status == 200
+        out = await r.json()
+        assert out["feed"]["a"] == 20 and "a1" not in out["feed"]
+        stored = reg.get(1).config["feed_schedule"]["deferred"][0]
+        assert stored["a"] == 20 and "a1" not in stored
+    finally:
+        await c.close()
+
+
+@pytest.mark.parametrize("bad", [
+    {"schedule": [{"re": "1", "it": [{"id": 1, "t": 60, "a": 256}]}]},  # wraps a byte
+    {"schedule": [{"re": "1", "it": [{"id": 1, "t": 60, "a": -1}]}]},
+    {"schedule": [{"re": "1", "it": [{"id": 1, "t": 60}]}]},            # no amount at all
+])
+async def test_a_malformed_single_hopper_schedule_is_refused(bad):
+    app, reg, bridge = _panel("d4h")
     c = await _client(app)
     try:
         status, _ = await _save(c, "feed_schedule", bad)

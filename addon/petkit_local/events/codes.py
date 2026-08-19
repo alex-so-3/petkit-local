@@ -940,6 +940,17 @@ SCHEDULE_TYPES: dict[int, str] = {
 #: time=%d,repeats=%d` — so `a1`/`a2` are the per-hopper portions, the same pair
 #: a `feed_realtime` carries on this model, and `re` is the group's weekdays.
 #:
+#: The single-hopper D4H/D4H2 carries `a` instead — one amount, no per-hopper
+#: split — exactly as it reads `amount` where the Dual-Hopper reads
+#: `amount1`/`amount2` from a `feed_realtime` (`utils/const.py`,
+#: `ha/commands.py::_feed`). Confirmed on a D4H2 (867): a cloud-made schedule
+#: with `a` in both `it[]` and `latest[]` dispensed, while `a1`/`a2` ran the
+#: cycle and put out nothing — `real_amount: 0, err_code: 8` (FEED_RESULT[8],
+#: "failed (nothing dispensed)"). So the amount key is
+#: PER MODEL and never both: `a` on a single hopper, `a1`/`a2` on a dual. The
+#: two never convert — `a` is the device's own unit (÷ a config constant, like
+#: realtime `amount`), not the portions a hopper counts.
+#:
 #: `it` arrived POPULATED on 2026-08-12 — 21 proxied `dev_feed_get` responses
 #: from the real cloud to a D4SH with meals set. They settle what the earlier
 #: firmware read could not:
@@ -957,7 +968,7 @@ SCHEDULE_TYPES: dict[int, str] = {
 #:     `it` anyway, because that is what the real cloud sends (keys in
 #:     alphabetical order) and there is no reason to hand the device a payload
 #:     a shape narrower than the one it knows.
-FEED_SCHEDULE_ITEM_KEYS = ("id", "t", "a1", "a2")
+FEED_SCHEDULE_ITEM_KEYS = ("id", "t", "a", "a1", "a2")
 
 #: The weekday numbering PetKit uses everywhere a schedule names days:
 #: `schedule[].repeats`, `cameraMultiRange[].rpt` and their siblings.
