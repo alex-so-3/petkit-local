@@ -166,9 +166,11 @@ function renderWeeklyEditor(id, t, value) {
 }
 
 // A feeder's meals. Groups of them share weekdays, which is what `re` is on the
-// group and `it` is the meals inside it; each meal is `{id, t, a1, a2}`, read
-// out of a D4SH `ctrl` (see events/codes.py::FEED_SCHEDULE_ITEM_KEYS). `a2` is
-// the second hopper and only a Dual-Hopper has one.
+// group and `it` is the meals inside it. The amount key is per model, read out
+// of a `ctrl` (see events/codes.py::FEED_SCHEDULE_ITEM_KEYS): a Dual-Hopper meal
+// is `{id, t, a1, a2}`, one portion per hopper (`t.dual`); a single-hopper
+// D4H/D4H2 is `{id, t, a}`. Sending the wrong key runs the feed and dispenses
+// nothing (`err_code 8`), so the control is bound to whichever the model reads.
 function renderFeedEditor(id, t, value) {
   const groups = Array.isArray(value.schedule) ? value.schedule : [];
   const dat = ` data-id="${esc(id)}" data-target="${esc(t.target)}"`;
@@ -192,8 +194,8 @@ function renderFeedEditor(id, t, value) {
                 (meal, mi) => `<div class="sched-row">
         <span class="sched-vals">
           <input type="time" value="${esc(secToClock(meal.t))}" data-change="sched-meal-time"${dat} data-path="${esc(gi)}" data-idx="${esc(mi)}">
-          <label class="sw-inline"><span>${t.dual ? 'Hopper 1' : 'Portions'}</span>
-            <input type="number" class="sched-portion" min="0" max="255" step="1" value="${esc(meal.a1 ?? 0)}" data-change="sched-meal-a1"${dat} data-path="${esc(gi)}" data-idx="${esc(mi)}"></label>
+          <label class="sw-inline"><span>${t.dual ? 'Hopper 1' : 'Amount'}</span>
+            <input type="number" class="sched-portion" min="0" max="255" step="1" value="${esc(t.dual ? (meal.a1 ?? 0) : (meal.a ?? meal.a1 ?? 0))}" data-change="${t.dual ? 'sched-meal-a1' : 'sched-meal-a'}"${dat} data-path="${esc(gi)}" data-idx="${esc(mi)}"></label>
           ${
             t.dual
               ? `<label class="sw-inline"><span>Hopper 2</span>
@@ -430,6 +432,21 @@ onAction('sched-add-point', el =>
 // --- feeder meals -----------------------------------------------------------
 const feedGroup = (v, path) => v.schedule[Number(path)];
 
+// Whether this feeder's meals carry two hopper amounts (`a1`/`a2`) or one
+// (`a`). The server decides it, next to the set that answers the same question
+// for feed_realtime (defaults.schedule_targets, utils/const.py).
+const feedIsDual = (id, target) => {
+  const d = DEV_DETAIL.get(Number(id));
+  const t = ((d && d.schedules) || []).find(s => s.target === target);
+  return !!(t && t.dual);
+};
+
+// A new single-hopper meal's default `a`. 10 is what the single-hopper path
+// sends for a manual feed (ha/commands.py::SINGLE_HOPPER_AMOUNT) — the device's
+// own unit, divided by a config constant, NOT portions; a D4H2 cloud schedule
+// was captured dispensing at `a: 20`. The owner sets the real size.
+const SINGLE_MEAL_AMOUNT = 10;
+
 onAction('sched-add-feed-group', el =>
   schedEdit(el.dataset.id, el.dataset.target, v => {
     if (!Array.isArray(v.schedule)) v.schedule = [];
@@ -452,7 +469,11 @@ onAction('sched-add-meal', el =>
         (max, g) => (g.it || []).reduce((m, meal) => Math.max(m, Number(meal.id) || 0), max),
         0,
       ) + 1;
-    group.it.push({ id: next, t: 0, a1: 1, a2: 0 });
+    // The amount key must match the model, or the feed dispenses nothing.
+    const amount = feedIsDual(el.dataset.id, el.dataset.target)
+      ? { a1: 1, a2: 0 }
+      : { a: SINGLE_MEAL_AMOUNT };
+    group.it.push({ id: next, t: 0, ...amount });
   }),
 );
 onAction('sched-drop-meal', el =>
@@ -474,6 +495,7 @@ const mealAmount = (el, field) =>
   });
 onChange('sched-meal-a1', el => mealAmount(el, 'a1'));
 onChange('sched-meal-a2', el => mealAmount(el, 'a2'));
+onChange('sched-meal-a', el => mealAmount(el, 'a'));
 
 onAction('sched-revert', el => {
   SCHEDULE_EDITS.delete(schedKey(Number(el.dataset.id), el.dataset.target));

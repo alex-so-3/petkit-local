@@ -40,6 +40,22 @@ _EMPTY_GROUP = {"re": "1,2,3,4,5,6,7", "it": [], "itemJsonString": "[]"}
 _ITEM_JSON = dict(separators=(",", ":"), sort_keys=True)
 
 
+def _amount_fields(src: dict) -> dict:
+    """The meal's dispensed amount, in whichever shape the source carries.
+
+    A single-hopper D4H/D4H2 meal holds one ``a``; a Dual-Hopper holds
+    ``a1``/``a2`` (``events/codes.py::FEED_SCHEDULE_ITEM_KEYS``). ``latest[]``
+    must repeat the SAME key the firmware reads: a D4H fired from a ``latest``
+    entry carrying ``a1``/``a2`` runs the feed cycle and dispenses nothing
+    (``real_amount: 0, err_code: 8``, the mirror of issue #2). The two shapes
+    never convert — ``a`` is the device's own unit, not the portions a hopper
+    counts — so this copies the one present rather than deriving the other.
+    """
+    if "a" in src:
+        return {"a": src["a"]}
+    return {"a1": src.get("a1", 0), "a2": src.get("a2", 0)}
+
+
 def _local_midnight(now: float, day_offset: int) -> float:
     """Local midnight ``day_offset`` days after the day containing ``now``.
 
@@ -84,7 +100,10 @@ def _build_latest(feed: dict, now: float) -> list[dict]:
 
     Both kinds land here — ``s_`` instances of recurring meals and ``d_``
     deferred feeds — sorted by countdown. ``t`` is ``floor(fire - now)``,
-    which is why the cloud's countdowns keep landing on :59.
+    which is why the cloud's countdowns keep landing on :59. Each entry carries
+    the amount forward in the source meal's own shape (``_amount_fields``): ``a``
+    for a single-hopper D4H, ``a1``/``a2`` for a Dual-Hopper. The firmware fires
+    from ``latest``, so getting that key wrong is a feed that dispenses nothing.
 
     The two-day window is what 21 captures show: meals four days out never
     appeared, a deferred feed 27 hours out (tomorrow evening) always did. A
@@ -114,8 +133,7 @@ def _build_latest(feed: dict, now: float) -> list[dict]:
                 result.append({
                     "id": f"s_{date_str}_{t_secs}",
                     "t": int(fire - now),
-                    "a1": item.get("a1", 0),
-                    "a2": item.get("a2", 0),
+                    **_amount_fields(item),
                 })
 
     deferred = feed.get("deferred") or []
@@ -130,8 +148,7 @@ def _build_latest(feed: dict, now: float) -> list[dict]:
         result.append({
             "id": d.get("id", ""),
             "t": int(fire_at - now),
-            "a1": d.get("a1", 0),
-            "a2": d.get("a2", 0),
+            **_amount_fields(d),
         })
     if len(remaining) != len(deferred):
         feed["deferred"] = remaining
