@@ -76,14 +76,31 @@ function schedValue(id, t) {
   return JSON.parse(JSON.stringify(t.value ?? (t.kind === 'feed' ? { schedule: [] } : [])));
 }
 
-function schedEdit(id, target, fn) {
+function schedEdit(id, target, fn, repaint = true) {
   const d = DEV_DETAIL.get(Number(id));
   const t = (d.schedules || []).find(s => s.target === target);
   if (!t) return;
   const value = schedValue(Number(id), t);
   const next = fn(value);
   SCHEDULE_EDITS.set(schedKey(Number(id), target), next === undefined ? value : next);
-  repaintSchedules(Number(id));
+  if (repaint) repaintSchedules(Number(id));
+}
+
+// A value typed into a text or number field: store the edit and reveal Save
+// WITHOUT repainting. Re-rendering the card would replace the very <input> being
+// typed in, and an <input type="time"> commits `01:00` the instant its hour
+// segment reads `1` (the minute is already `00`), firing `change` mid-entry --
+// so a repaint there steals focus before the second digit and the meal lands an
+// hour early. The dirty class and toolbar are added in place instead; the next
+// full repaint renders the identical thing from SCHEDULE_EDITS.
+function schedEditLive(el, fn) {
+  schedEdit(el.dataset.id, el.dataset.target, fn, false);
+  const sched = el.closest('.sched');
+  if (!sched || sched.classList.contains('dirty')) return;
+  sched.classList.add('dirty');
+  const head = sched.querySelector('.sched-head');
+  if (head && !head.querySelector('.sched-actions'))
+    head.insertAdjacentHTML('beforeend', schedActions(el.dataset.id, el.dataset.target));
 }
 
 function repaintSchedules(id) {
@@ -262,6 +279,14 @@ function renderPointsEditor(id, t, value) {
     .join('');
 }
 
+// A dirty schedule's Save/Discard pair. Also injected in place by schedEditLive
+// when a text field is edited, so it is a function rather than inline markup.
+function schedActions(id, target) {
+  const dat = ` data-id="${esc(id)}" data-target="${esc(target)}"`;
+  return `<span class="sched-actions"><button class="act"${dat} data-action="sched-save">Save</button>
+    <button class="link"${dat} data-action="sched-revert">Discard</button></span>`;
+}
+
 function renderSchedules(d, sectionEntities) {
   const targets = d.schedules || [];
   const all = sectionEntities || [];
@@ -284,15 +309,9 @@ function renderSchedules(d, sectionEntities) {
       // Save appears only once there is something to save. Five permanent Save
       // buttons in one card read as five things demanding attention; a button
       // that shows up when you have changed something reads as one.
-      const dat = ` data-id="${esc(d.id)}" data-target="${esc(t.target)}"`;
       return `<div class="sched${dirty ? ' dirty' : ''}">
       <div class="sched-head"><span class="sched-name">${esc(t.name)}</span>
-        ${
-          dirty
-            ? `<span class="sched-actions"><button class="act"${dat} data-action="sched-save">Save</button>
-               <button class="link"${dat} data-action="sched-revert">Discard</button></span>`
-            : ''
-        }</div>
+        ${dirty ? schedActions(d.id, t.target) : ''}</div>
       ${body}</div>`;
     })
     .join('');
@@ -333,13 +352,13 @@ onSection('schedules', renderSchedules);
 const rangeListOf = (value, path) => (path === '' ? value : value[Number(path)].time);
 
 onChange('sched-from', el =>
-  schedEdit(el.dataset.id, el.dataset.target, v => {
+  schedEditLive(el, v => {
     const m = clockToMin(el.value);
     if (m !== null) rangeListOf(v, el.dataset.path)[Number(el.dataset.idx)][0] = m;
   }),
 );
 onChange('sched-to', el =>
-  schedEdit(el.dataset.id, el.dataset.target, v => {
+  schedEditLive(el, v => {
     const m = clockToMin(el.value);
     if (m !== null) rangeListOf(v, el.dataset.path)[Number(el.dataset.idx)][1] = m;
   }),
@@ -407,7 +426,7 @@ onAction('sched-drop-weekly', el =>
   }),
 );
 onChange('sched-point-time', el =>
-  schedEdit(el.dataset.id, el.dataset.target, v => {
+  schedEditLive(el, v => {
     const m = clockToMin(el.value);
     if (m !== null) v[Number(el.dataset.idx)].time = m;
   }),
@@ -466,13 +485,13 @@ onAction('sched-drop-meal', el =>
   }),
 );
 onChange('sched-meal-time', el =>
-  schedEdit(el.dataset.id, el.dataset.target, v => {
+  schedEditLive(el, v => {
     const s = clockToSec(el.value);
     if (s !== null) feedGroup(v, el.dataset.path).it[Number(el.dataset.idx)].t = s;
   }),
 );
 const mealAmount = (el, field) =>
-  schedEdit(el.dataset.id, el.dataset.target, v => {
+  schedEditLive(el, v => {
     const n = Number(el.value);
     if (Number.isInteger(n) && n >= 0 && n <= 255)
       feedGroup(v, el.dataset.path).it[Number(el.dataset.idx)][field] = n;
