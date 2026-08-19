@@ -12,7 +12,7 @@ import time
 import pytest
 
 from petkit_local.utils.timeutil import (
-    local_day_bounds, local_day_start, local_offset_hours,
+    cloud_timestamp, local_day_bounds, local_day_start, local_offset_hours,
     offset_hours_for_locale, parse_date,
 )
 
@@ -145,3 +145,31 @@ def test_unusable_locale_returns_none_for_fallback(bad):
     caller drops to the numeric sources. `UTC` has no slash and is handled by
     the numeric path's 0.0 anyway."""
     assert offset_hours_for_locale(bad, _SUMMER) is None
+
+
+def test_cloud_timestamp_defaults_to_utc():
+    """No offset given -> the historical UTC/`+0000`, for an unidentified
+    device we cannot speak an offset for. `_SUMMER` is UTC midnight."""
+    assert cloud_timestamp(_SUMMER) == "2026-07-26T00:00:00.000+0000"
+
+
+def test_cloud_timestamp_localizes_to_the_offset():
+    """UTC midnight is 02:00 at +2, and the offset is stamped `+0200`.
+
+    This is the `dev_state_report` `time` field the firmware reads to set its
+    RTC: served `+0000` on a UTC+2 box it fires every scheduled meal two hours
+    late, so the wall-clock must really move, not just the suffix be relabelled.
+    """
+    assert cloud_timestamp(_SUMMER, offset_hours=2.0) == "2026-07-26T02:00:00.000+0200"
+
+
+@pytest.mark.parametrize("offset,suffix", [
+    (0.0, "+0000"),
+    (-7.0, "-0700"),      # west of UTC (PDT)
+    (5.75, "+0545"),      # quarter-hour zone -> whole-minute +HHMM, never sub-minute
+    (5.5, "+0530"),       # half-hour zone
+    (14.0, "+1400"),      # the far end of api_timezone's valid range
+])
+def test_cloud_timestamp_offset_is_hhmm(offset, suffix):
+    """`+HHMM`, no colon and no seconds -- the shape the firmware parses."""
+    assert cloud_timestamp(_SUMMER, offset_hours=offset).endswith(suffix)
