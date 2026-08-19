@@ -373,7 +373,12 @@ const entryListOf = v => (Array.isArray(v) ? v : v.schedule);
 onChange('sched-day', el =>
   schedEdit(el.dataset.id, el.dataset.target, v => {
     const entry = entryListOf(v)[Number(el.dataset.idx)];
-    const field = 'rpt' in entry ? 'rpt' : 'repeats';
+    // The day set has three spellings and this bar renders all of them: a feeder
+    // group's `re`, a weekly entry's `rpt`, a cleaning point's `repeats`. Write
+    // back the one THIS entry actually carries — resolving `re` last put every
+    // feeder click on a stray `repeats` the device never reads, so the weekdays
+    // repainted straight back from the untouched `re`.
+    const field = 're' in entry ? 're' : 'rpt' in entry ? 'rpt' : 'repeats';
     const days = new Set(
       String(entry[field] || '')
         .split(',')
