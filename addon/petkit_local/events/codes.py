@@ -1320,3 +1320,17 @@ def codes_for(device_type: str | None) -> dict[str, EventCode]:
     table = {**MQTT_EVENT_TOPICS, **HTTP_CODES_BY_CATEGORY.get(category, {})}
     return {key: code for key, code in table.items()
             if codename in code.families}
+
+
+def visit_summary_event_types(device_type: str | None) -> list[str]:
+    """The raw event_types that mean "a completed toilet visit" on this model.
+
+    Both namespaces, because a litter box reaches us over either transport: the
+    HTTP code `10` and the MQTT topic `pet_out` are the same event. Derived from
+    the tables rather than restated, so a code that gains or loses the
+    visit-summary role cannot leave a hard-coded list behind — which is exactly
+    how the SQL that counts visits and the runtime branch that accumulates them
+    would drift into counting different things.
+    """
+    return sorted(key for key, code in codes_for(device_type).items()
+                  if code.kind == KIND_TOILET and code.role == ROLE_VISIT_SUMMARY)

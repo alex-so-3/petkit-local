@@ -17,7 +17,11 @@ from urllib.parse import urlparse
 
 from aiohttp import web
 
+from sqlalchemy.exc import SQLAlchemyError
+
+from petkit_local.devices.state_parsers import reports_used_times
 from petkit_local.events.ingest import _MODULE_TYPE_TO_CATEGORY, backfill_event_rows
+from petkit_local.events.normalize import visit_day_key
 from petkit_local.http.bucket import create_bucket_app
 from petkit_local.http.handlers.upload_file_info import wait_for_pending as wait_for_media_tasks
 from petkit_local.media.retention import RetentionSweeper
@@ -73,6 +77,34 @@ async def _stop_tasks(tasks: list[asyncio.Task[Any]]) -> None:
             log.exception("Background task %s failed during shutdown", task.get_name())
 
 
+async def _seed_visit_counts(registry: Any, event_store: Any) -> None:
+    """Restore `state.usedTimes` for the boxes whose firmware never reports it.
+
+    Only those: `reports_used_times` is False exactly for the models where our
+    count is the only count, and seeding a model that keeps its own would
+    overwrite the device's number with ours before its first report lands.
+
+    A store that cannot answer is not fatal — the counter simply starts the day
+    from the next visit, which is where it was before this existed — so the
+    failure is logged and startup continues.
+    """
+    for device in registry.all():
+        if reports_used_times(device.device_type):
+            continue
+        try:
+            count = await event_store.device_visit_count_today(
+                device.petkit_id, device.device_type)
+        except SQLAlchemyError:
+            log.warning("Could not seed Times Used for %s %s; it will start from "
+                        "the next visit", device.device_type, device.petkit_id,
+                        exc_info=True)
+            continue
+        device.state["usedTimesDay"] = visit_day_key()
+        device.state["usedTimes"] = count
+        log.info("Seeded Times Used for %s %s from the event store: %d today",
+                 device.device_type, device.petkit_id, count)
+
+
 async def start_background(services: Services, app_instance: web.Application) -> None:
     """aiohttp on_startup hook: open the store, then spawn every service.
 
@@ -115,6 +147,14 @@ async def start_background(services: Services, app_instance: web.Application) ->
     # `mark_dirty()` coalesces writes instead of fsyncing per message.
     await registry.start()
     await ble_registry.start()
+
+    # Rebuild today's Times Used before anything can publish it. The count
+    # lives in `Device.state`, which `to_dict` deliberately excludes, so a
+    # restart at 18:00 would otherwise report a box that had been used five
+    # times that day as unused until the next visit. The event store has the
+    # visits; this is the one moment both it and the devices are ready and
+    # nothing has read the state yet.
+    await _seed_visit_counts(registry, event_store)
 
     # Web panel, over HTTP only, and deliberately not served a SECOND time on
     # an HTTPS port of its own. A self-signed listener with no authentication

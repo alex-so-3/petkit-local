@@ -27,6 +27,27 @@ VERSION = "2.1.0"
 DEVICE_TYPES_LITTER = {"t3", "t4", "t5", "t6", "t7"}
 DEVICE_TYPES_FEEDER = {"feeder", "feedermini", "d3", "d4", "d4s", "d4h", "d4sh"}
 
+# Litter models that SEND `litter.usedTimes` and never fill it. The field is in
+# every report the firmware emits and its value is a hard-coded zero, so passing
+# it through publishes a Times Used that reads 0 while the cat is using the box —
+# a wrong number, which is worse than an empty one.
+#
+# Evidence (T4, 2026-08-29): 209 stored state snapshots spanning 2026-08-16 to
+# 2026-08-29 — every state block attached to every event this device reported,
+# including the ones captured mid-visit and at `pet_out` — carry
+# `litter.usedTimes: 0`, with no other value anywhere in the set. The same store
+# holds 41 completed toilet visits over that window, so the box was in daily use
+# throughout. The camera models are NOT in here: a real T5 report carries
+# `usedTimes: 3` (tests/test_state_parsers.py), so theirs is a live counter.
+#
+# `t3` shares `_parse_litter_esp32` with the T4 and very likely behaves the same
+# way, but no T3 capture exists to prove it and a guess here would suppress a
+# field that might be real. Add it when someone confirms a T3 does the same.
+#
+# `events/normalize.py::_accumulate_visit_count` fills the gap by counting the
+# device's own completed visits, the way the cloud does it.
+DEVICE_TYPES_LITTER_USED_TIMES_UNREPORTED = {"t4"}
+
 # Feeders with two hoppers, which dispense from each one separately.
 #
 # This is not cosmetic: the D4SH firmware (867, `ctrl`,

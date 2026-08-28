@@ -13,10 +13,15 @@ import re
 
 from aiohttp import web
 
+from sqlalchemy.exc import SQLAlchemyError
+
+from petkit_local.devices.base import Device
 from petkit_local.devices.registry import DeviceRegistry
+from petkit_local.events.normalize import visit_day_key
 from petkit_local.http.proxy import close_proxy_session, get_proxy_session
 from petkit_local.http.server import create_app
-from petkit_local.main.lifecycle import BACKGROUND_TASKS, _spawn, _stop_tasks
+from petkit_local.main.lifecycle import (BACKGROUND_TASKS, _seed_visit_counts, _spawn,
+                                         _stop_tasks)
 
 CONFIG = {
     "api_url": "http://server/6/",
@@ -337,3 +342,56 @@ def _capture() -> _Collector:
 def _release(handler: _Collector) -> str:
     logging.getLogger("petkit_local.main").removeHandler(handler)
     return "\n".join(handler.lines)
+
+
+# --- seeding Times Used across a restart ------------------------------------
+
+class _FakeStore:
+    """Answers the visit count, and records who it was asked about."""
+
+    def __init__(self, counts=None, raises=False):
+        self.counts = counts or {}
+        self.raises = raises
+        self.asked: list[tuple[int, str]] = []
+
+    async def device_visit_count_today(self, device_id, device_type, now=None):
+        self.asked.append((device_id, device_type))
+        if self.raises:
+            raise SQLAlchemyError("db is gone")
+        return self.counts.get(device_id, 0)
+
+
+class _FakeRegistry:
+    def __init__(self, devices):
+        self._devices = devices
+
+    def all(self):
+        return self._devices
+
+
+async def test_a_restart_restores_todays_times_used():
+    """`Device.state` is not persisted, so without this a restart at 18:00
+    reports a box used five times that day as unused until the next visit."""
+    box = Device(petkit_id=100, device_type="t4", serial_number="SN")
+    store = _FakeStore({100: 5})
+    await _seed_visit_counts(_FakeRegistry([box]), store)
+    assert box.state["usedTimes"] == 5
+    assert box.state["usedTimesDay"] == visit_day_key()
+
+
+async def test_a_box_with_its_own_counter_is_not_seeded():
+    """Seeding a T5 would put our count where the device's own number belongs,
+    and win until its next report."""
+    box = Device(petkit_id=101, device_type="t5", serial_number="SN")
+    store = _FakeStore({101: 5})
+    await _seed_visit_counts(_FakeRegistry([box]), store)
+    assert "usedTimes" not in box.state
+    assert store.asked == []
+
+
+async def test_a_store_that_cannot_answer_does_not_stop_startup():
+    """The counter simply starts from the next visit — which is where it was
+    before seeding existed. Failing startup over it would be worse."""
+    box = Device(petkit_id=102, device_type="t4", serial_number="SN")
+    await _seed_visit_counts(_FakeRegistry([box]), _FakeStore(raises=True))
+    assert "usedTimes" not in box.state

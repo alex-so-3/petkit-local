@@ -1,9 +1,11 @@
 import asyncio
 import sqlite3
 import tempfile
+import time
 from pathlib import Path
 
 from petkit_local.events.store import EventStore
+from petkit_local.utils.timeutil import local_day_start
 
 
 async def test_upsert_event_dedups_by_event_uid(event_store: EventStore):
@@ -415,3 +417,47 @@ async def test_blocked_attempts_survive_a_reopen(event_store: EventStore):
     rows = await reopened.recent_blocked_attempts()
     assert [r["kind"] for r in rows] == ["secret"]
     await reopened.close()
+
+
+# --- the daily visit count that seeds Times Used ----------------------------
+
+async def test_visit_count_counts_summaries_not_every_row_of_a_visit(
+        event_store: EventStore):
+    """One visit files several rows under the toilet kind: `pet_in` opens it and
+    the `9` weight checks sample it, both sharing the kind with the `10`
+    summary. Counting the kind reports three uses for one visit, which is how
+    the seeded number and the running one would disagree by lunchtime."""
+    now = time.time()
+    for event_type in ("pet_in", "9", "10", "9", "10"):
+        await event_store.upsert_event({"device_id": 7, "event_type": event_type,
+                                        "event_kind": "toilet_visit", "ts": now})
+    assert await event_store.device_visit_count_today(7, "t4") == 2
+
+
+async def test_visit_count_is_cut_at_local_midnight(event_store: EventStore):
+    now = time.time()
+    await event_store.upsert_event({"device_id": 7, "event_type": "10",
+                                    "event_kind": "toilet_visit",
+                                    "ts": local_day_start(now) - 60})
+    await event_store.upsert_event({"device_id": 7, "event_type": "10",
+                                    "event_kind": "toilet_visit", "ts": now})
+    assert await event_store.device_visit_count_today(7, "t4", now=now) == 1
+
+
+async def test_visit_count_ignores_the_other_boxes(event_store: EventStore):
+    now = time.time()
+    await event_store.upsert_event({"device_id": 7, "event_type": "10",
+                                    "event_kind": "toilet_visit", "ts": now})
+    await event_store.upsert_event({"device_id": 8, "event_type": "10",
+                                    "event_kind": "toilet_visit", "ts": now})
+    assert await event_store.device_visit_count_today(7, "t4") == 1
+
+
+async def test_visit_count_is_zero_for_a_device_that_has_no_visits(
+        event_store: EventStore):
+    """A feeder has no visit-summary code at all, so this must answer 0 rather
+    than counting whatever its numeric codes happen to collide with."""
+    now = time.time()
+    await event_store.upsert_event({"device_id": 9, "event_type": "10",
+                                    "event_kind": "feeding", "ts": now})
+    assert await event_store.device_visit_count_today(9, "d4h") == 0

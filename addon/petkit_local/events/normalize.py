@@ -37,7 +37,8 @@ from typing import TYPE_CHECKING, Any
 
 from petkit_local.devices.state_parsers import (apply_consumable_state,
                                                 normalize_property_params,
-                                                parse_state_report)
+                                                parse_state_report,
+                                                reports_used_times)
 from petkit_local.events import codes, decode
 from petkit_local.utils.coerce import to_float, to_int
 from petkit_local.utils.dicts import first_of
@@ -431,9 +432,21 @@ def apply_state_snapshot(device: Device, state: Any) -> bool:
     if not isinstance(state, dict) or not state:
         return False
 
+    # The RAW merge lands first, for the panel's Debug info and the echoes, and
+    # it is not filtered: it is what the device said. That makes it the one path
+    # that can still overwrite the derived visit count with a firmware zero, so
+    # the count is lifted over it. No T4 report seen carries a flat `usedTimes`
+    # (it is nested under `litter`), but a model that does would silently undo
+    # the whole fix, and the failure would look exactly like the bug it fixes.
+    derived_used_times = None
+    if not reports_used_times(device.device_type):
+        derived_used_times = device.state.get("usedTimes")
+
     device.state.update(state)  # raw, for the panel's Debug info and the echoes
     device.state.update(parse_state_report(device.device_type, state))
     device.state.update(normalize_property_params(device.device_type, state))
+    if derived_used_times is not None:
+        device.state["usedTimes"] = derived_used_times
     apply_consumable_state(device)
     device.last_state_report = time.time()
     return True
@@ -466,10 +479,58 @@ def apply_derived_state(device: Device, event_type: str, content: dict) -> None:
         weight = to_float(content.get("pet_weight", content.get("petWeight")), None)
         if weight is not None:
             device.state["petWeight"] = weight
+        _accumulate_visit_count(device, content)
 
     elif code.kind == codes.KIND_FEEDING and code.role == codes.ROLE_DONE:
         device.state["lastFeed"] = _now_iso()
         _accumulate_feed_totals(device, content)
+
+
+def visit_day_key(ts: float | None = None) -> str:
+    """The `YYYY-MM-DD` local day a visit belongs to, for the daily counter.
+
+    A litter box's visit summary carries no `day` field — unlike a feeder's
+    `feed_over`, which is why the feeder counter can follow the device's own
+    reading of the date and this one cannot. `time_in` is the device clock, and
+    the device is handed our locale at provisioning (`utils/timeutil.py`), so
+    localizing it here puts the two clocks back in the same day. Falls back to
+    now for a summary that omits the stamp.
+
+    Cut at LOCAL midnight, matching `EventStore.pet_visit_stats` and the panel's
+    Timeline. Cutting at UTC would file an after-midnight visit under yesterday
+    on every install east of Greenwich, and the sensor would read one low every
+    morning until the offset had passed.
+    """
+    moment = datetime.fromtimestamp(ts) if ts else datetime.now()
+    return moment.date().isoformat()
+
+
+def _accumulate_visit_count(device: Device, content: dict) -> None:
+    """Keep today's "Times Used" running for a box that never reports it.
+
+    `state.usedTimes` is a field the T4 sends pinned at zero (see
+    `utils/const.py::DEVICE_TYPES_LITTER_USED_TIMES_UNREPORTED`), so on those
+    models `state_parsers` drops it and this is the only writer. PetKit's own
+    service counts the same thing from the same visit records; being the cloud
+    means doing the same.
+
+    A model whose counter IS live keeps it: this returns without touching
+    `state` there, so a T5's own number is never overwritten by ours.
+
+    `usedTimesDay` rides alongside the count so the rollover is explicit rather
+    than a scheduled reset — the first visit of a new local day sees a stale day
+    key and starts from one. `main/lifecycle.py` seeds both at startup from the
+    event store, because `Device.to_dict` excludes `state` and a restart would
+    otherwise drop the day's count back to zero until the next visit.
+    """
+    if reports_used_times(device.device_type):
+        return
+    day = visit_day_key(to_float(content.get("time_in"), None))
+    count = 0
+    if device.state.get("usedTimesDay") == day:
+        count = int(to_float(device.state.get("usedTimes"), 0) or 0)
+    device.state["usedTimesDay"] = day
+    device.state["usedTimes"] = count + 1
 
 
 def _accumulate_feed_totals(device: Device, content: dict) -> None:

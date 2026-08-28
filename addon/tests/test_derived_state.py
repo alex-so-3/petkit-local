@@ -94,6 +94,83 @@ def test_the_code_is_read_per_device_category():
     assert "lastFeed" not in litter.state
 
 
+# --- Times Used, on the boxes that never report their own --------------------
+#
+# A T4 sends `litter.usedTimes` hard-coded to zero: 209 stored state snapshots
+# spanning 2026-08-16..29 carry that value and no other, against 41 completed
+# visits in the same window. So the field is dropped on that model and the
+# counter is derived from the visits, the way PetKit's own service derives it.
+
+
+@pytest.mark.parametrize("event_type", ["pet_out", "10"])
+def test_a_finished_visit_counts_towards_times_used_on_either_transport(event_type):
+    d = _device("t4")
+    apply_derived_state(d, event_type, {"pet_weight": 4200})
+    assert d.state["usedTimes"] == 1
+    apply_derived_state(d, event_type, {"pet_weight": 4100})
+    assert d.state["usedTimes"] == 2
+
+
+@pytest.mark.parametrize("event_type", ["pet_in", "9"])
+def test_a_visit_step_does_not_count_as_a_use(event_type):
+    """One visit stores several rows — the entry and the mid-visit weight
+    checks share the toilet kind with the summary. Counting those would report
+    three uses for every one."""
+    d = _device("t4")
+    apply_derived_state(d, event_type, {"pet_weight": 4200})
+    assert "usedTimes" not in d.state
+
+
+def test_the_count_starts_over_on_the_next_local_day():
+    """The rollover is carried by the day key stored beside the count, not by a
+    scheduled reset — nothing has to be running at midnight for it to happen."""
+    d = _device("t4")
+    yesterday = time.time() - 24 * 3600
+    apply_derived_state(d, "10", {"time_in": yesterday})
+    apply_derived_state(d, "10", {"time_in": yesterday})
+    assert d.state["usedTimes"] == 2
+    apply_derived_state(d, "10", {"time_in": time.time()})
+    assert d.state["usedTimes"] == 1
+
+
+def test_a_box_that_keeps_its_own_counter_is_left_alone():
+    """A real T5 reports `usedTimes: 3`. Ours must never overwrite the
+    device's own number with a count of what we happened to observe."""
+    d = _device("t5")
+    d.state["usedTimes"] = 3
+    apply_derived_state(d, "10", {"pet_weight": 4200})
+    assert d.state["usedTimes"] == 3
+    assert "usedTimesDay" not in d.state
+
+
+def test_a_state_report_cannot_reset_the_count_it_does_not_carry():
+    """The whole point. A T4 heartbeats every ~11s and every one of those
+    reports says `usedTimes: 0`; before the suppression, the derived count
+    survived for exactly one heartbeat."""
+    from petkit_local.events.ingest import apply_state_snapshot
+
+    d = _device("t4")
+    apply_derived_state(d, "10", {"pet_weight": 4200})
+    assert d.state["usedTimes"] == 1
+    # The exact nested shape a real T4 posts, zero and all.
+    apply_state_snapshot(d, {"litter": {"weight": 3119, "usedTimes": 0,
+                                        "percent": 100, "sandType": 1}})
+    assert d.state["usedTimes"] == 1
+    # And again for a hypothetical firmware that also states it flat, which the
+    # unfiltered raw merge would otherwise let through.
+    apply_state_snapshot(d, {"usedTimes": 0, "sandPercent": 100})
+    assert d.state["usedTimes"] == 1
+
+
+def test_a_camera_box_still_takes_the_count_from_its_report():
+    from petkit_local.events.ingest import apply_state_snapshot
+
+    d = _device("t5")
+    apply_state_snapshot(d, {"litter": {"weight": 5469, "usedTimes": 3,
+                                        "percent": 40, "sandType": 1}})
+    assert d.state["usedTimes"] == 3
+
+
 # --- end to end over HTTP ---------------------------------------------------
 
 CONFIG = {"api_url": "http://server/6/", "mqtt_port": 1883, "proxy_mode": False,

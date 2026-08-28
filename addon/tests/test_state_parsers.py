@@ -19,7 +19,11 @@ def test_mqtt_property_post_normalizes_to_flat_keys():
     flat = normalize_property_params("t4", params)
     assert flat["sandPercent"] == 100
     assert flat["sandWeight"] == 3119
-    assert flat["usedTimes"] == 0
+    # NOT `flat["usedTimes"] == 0`. The T4 sends the field pinned at zero — this
+    # fixture is a real capture and shows it — so the parser drops it and the
+    # visit accumulator owns the key. Reading it back would republish 0 over the
+    # real count every heartbeat.
+    assert "usedTimes" not in flat
     assert flat["rssi"] == -51
     assert flat["petInTime"] == 0
     assert flat["boxState"] == 1

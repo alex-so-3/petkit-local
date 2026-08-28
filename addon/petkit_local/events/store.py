@@ -923,6 +923,33 @@ class EventStore:
             "last_device_id": device_id,
         }
 
+    async def device_visit_count_today(self, device_id: int, device_type: str,
+                                       now: float | None = None) -> int:
+        """How many completed toilet visits this device recorded since local midnight.
+
+        Backs the Times Used sensor on the models that never report their own
+        counter (`utils/const.py::DEVICE_TYPES_LITTER_USED_TIMES_UNREPORTED`).
+        `main/lifecycle.py` calls it once at startup to seed the running count
+        that `events/normalize.py::_accumulate_visit_count` then keeps.
+
+        Counts the VISIT-SUMMARY event types, not `event_kind == toilet_visit`:
+        one visit stores several rows under that kind — the `pet_in` start and
+        the mid-visit `9` weight checks share it with the `10` summary — so
+        counting the kind reports two or three uses for every one.
+
+        Local midnight, for the reason spelled out in `pet_visit_stats`.
+        """
+        types = codes.visit_summary_event_types(device_type)
+        if not types:
+            return 0
+        day_start = local_day_start(now if now is not None else time.time())
+        async with self._read() as session:
+            return await session.scalar(
+                select(func.count()).select_from(Event).where(
+                    Event.device_id == device_id,
+                    Event.event_type.in_(types),
+                    Event.ts >= day_start)) or 0
+
     async def pets_for_device(self, device_id: int) -> list[dict[str, Any]]:
         """Pets linked to one device, filtered in Python rather than in SQL.
 
