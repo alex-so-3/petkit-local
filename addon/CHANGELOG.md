@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **A device that opens with MQTT 5.0 is refused at once, not after ten
+  seconds.** T6 firmware 951 sends a v5 CONNECT. The broker speaks only 3.1.1
+  and refused it with a 3.1.1 CONNACK, which a v5 client cannot parse (v5 adds a
+  property length after the reason code), so the device sat out its own connect
+  timeout instead: 10.2 s measured on the wire against a real T6, where PetKit's
+  cloud refuses the same client in 0.7 s. That timeout is most of the window in
+  which the box has no MQTT session and its commands wait for the HTTP
+  heartbeat. The refusal is now sent in v5 shape (reason `0x84`, Unsupported
+  Protocol Version), so the client's fallback to 3.1.1 fires immediately. MQTT 5
+  is still not spoken; every other CONNACK is unchanged.
+
 ## 2.1.0 — 2026-08-12
 
 The YumShare Dual-Hopper (D4SH) camera feeder is now confirmed working, and most
