@@ -98,9 +98,10 @@ def create_app(registry: DeviceRegistry, config: dict) -> web.Application:
     for ver in ("6",):
         p = f"/{ver}/{{device_type}}"
         app.router.add_route("*", f"{p}/dev_signup", handle_signup)
-        # All three iot_device_info endpoints return the ali-wrapped block.
-        # The flat variant was wrong: cloud returns {ali: {...}} for every
-        # device, including those calling dev_iot_device_info (D4SH capture).
+        # All three iot_device_info endpoints share one handler. It answers
+        # ali-wrapped, as the cloud does for a D4SH on dev_iot_device_info,
+        # except for the ESP32 litter boxes, which the cloud answers flat
+        # (`iot_device_info.FLAT_CREDENTIAL_TYPES`).
         app.router.add_route("*", f"{p}/dev_iot_device_info", handle_iot_device_info)
         app.router.add_route("*", f"{p}/dev_only_iot_device_info", handle_iot_device_info)
         app.router.add_route("*", f"{p}/dev_only_iot_device_info_v2", handle_iot_device_info)

@@ -82,7 +82,8 @@ def to_signup(device: Device) -> dict[str, Any]:
 
 
 def to_iot_device_info(device: Device, mqtt_host: str) -> dict[str, Any]:
-    """`dev_only_iot_device_info[_v2]` — Ingenic/next-gen path, ali-wrapped."""
+    """MQTT credentials nested in the Aliyun `ali` envelope — every model but
+    `iot_device_info.FLAT_CREDENTIAL_TYPES`, on all three endpoint names."""
     return {
         "result": {
             "ali": {
@@ -102,12 +103,12 @@ def to_iot_device_info(device: Device, mqtt_host: str) -> dict[str, Any]:
 
 
 def to_iot_device_info_flat(device: Device, mqtt_host: str) -> dict[str, Any]:
-    """`dev_iot_device_info` — ESP32 path, FLAT block (no `ali` wrapper).
+    """The FLAT credential block (no `ali` wrapper), for the ESP32 litter boxes.
 
-    A different endpoint with a different schema from
-    `to_iot_device_info` (localkit's DevIotDeviceInfoResource): returning
-    the `ali`-wrapped block here leaves ESP32 devices unable to read their
-    MQTT credentials at all.
+    The same fields as `to_iot_device_info`, un-nested. PetKit's cloud answers
+    a T3 this way on `dev_iot_device_info`, and a T4 handed the `ali`-wrapped
+    block never gets past signup; a D4SH on the same endpoint is answered
+    wrapped. Which models get it is `iot_device_info.FLAT_CREDENTIAL_TYPES`.
     """
     return {
         "result": {

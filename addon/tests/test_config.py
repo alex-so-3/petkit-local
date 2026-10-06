@@ -105,6 +105,14 @@ def test_from_ha_addon_applies_valid_options():
     assert c.log_level == "DEBUG"  # main.py resolves this with getattr(logging, ...)
 
 
+def test_esp32_aliyun_mqtt_host_option_reaches_the_app_config():
+    assert _from_ha_addon_with({}).to_app_config()["esp32_aliyun_mqtt_host"] is False
+    c = _from_ha_addon_with({"esp32_aliyun_mqtt_host": True})
+    assert c.esp32_aliyun_mqtt_host is True
+    assert c.to_app_config()["esp32_aliyun_mqtt_host"] is True
+    assert _from_ha_addon_with({"esp32_aliyun_mqtt_host": "off"}).esp32_aliyun_mqtt_host is False
+
+
 def test_proxy_and_capture_are_not_add_on_options():
     """They are panel-only now: debugging switches you flip while watching a
     device, not something worth restarting the container for. An options file

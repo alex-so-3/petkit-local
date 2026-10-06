@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+- **New option `esp32_aliyun_mqtt_host`** (off by default) hands ESP32
+  devices their Aliyun broker name,
+  `<productKey>.iot-as-mqtt.eu-central-1.aliyuncs.com`, as `mqttHost` instead
+  of the API host. A T4 told to reach the broker under the API host completes
+  the TLS handshake and then never gets a session up; the same device handed a
+  name under that Aliyun domain connects at once (issue #34). It only helps
+  with DNS that resolves the name to this host and a broker certificate that
+  covers it and that the device trusts, neither of which the add-on sets up. The
+  Linux models never get it, and proxy mode keeps handing out this server's
+  address.
+
+- **The ESP32 litter boxes (T3, T4) get their MQTT credentials flat.** Every
+  model was answered with the `ali`-wrapped block on all three
+  `iot_device_info` endpoints. PetKit's cloud answers a T3 (fw 1.491) flat, no
+  `ali` key (proxied capture, issue #35), and a stock T4 (fw 1.652) handed the
+  wrapped block kept re-running signup and `dev_iot_device_info` instead of
+  settling (#33); answered flat, it settles. Only `t3` and `t4` change: the
+  ESP32 feeders and everything else keep the wrapped block a D4SH capture
+  showed, since nothing says otherwise for them.
+
 ## 2.1.0 — 2026-08-12
 
 The YumShare Dual-Hopper (D4SH) camera feeder is now confirmed working, and most

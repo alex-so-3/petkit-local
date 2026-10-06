@@ -273,6 +273,10 @@ class Config:
     # Enforce Aliyun HMAC sign. Default off = accept-all (like the reference
     # broker), so an algorithm/sign nuance never blocks a real device.
     mqtt_strict_auth: bool = False
+    # Hand ESP32 models their Aliyun broker name as mqttHost instead of the
+    # host derived from api_url. Needs DNS and a certificate for that name;
+    # see `http/handlers/iot_device_info.py::mqtt_host_for`.
+    esp32_aliyun_mqtt_host: bool = False
 
     # Seconds without a heartbeat or state report before a device is marked
     # offline (availability -> "offline" in HA).
@@ -415,6 +419,7 @@ class Config:
         return {
             "api_url": self.api_url,
             "mqtt_port": self.mqtt_port,
+            "esp32_aliyun_mqtt_host": self.esp32_aliyun_mqtt_host,
             "proxy_mode": self.proxy_mode,
             "proxy_upstream": self.proxy_upstream,
             "proxy_dns": self.proxy_dns,
@@ -525,6 +530,8 @@ class Config:
         c.mqtt_tls = _opt_bool(opts, "mqtt_tls", c.mqtt_tls)
         c.mqtt_tls_port = _opt_int(opts, "mqtt_tls_port", c.mqtt_tls_port)
         c.mqtt_strict_auth = _opt_bool(opts, "mqtt_strict_auth", c.mqtt_strict_auth)
+        c.esp32_aliyun_mqtt_host = _opt_bool(
+            opts, "esp32_aliyun_mqtt_host", c.esp32_aliyun_mqtt_host)
 
         # `capture` and every `proxy_*` key are deliberately NOT read from the
         # options file: they are debugging switches you flip while watching a

@@ -46,6 +46,7 @@ PetKit device ──HTTP───► petkit-local ──MQTT discovery──► 
 | `mqtt_tls` | `true` | Add a TLS listener to the device-facing broker (self-signed, generated on first start). |
 | `mqtt_tls_port` | `443` | Port for that listener. Change this and the matching port mapping together if your device dials a different one. |
 | `mqtt_strict_auth` | `false` | Enforce the Aliyun HMAC signature. Off by default so a signature nuance cannot lock a device out. |
+| `esp32_aliyun_mqtt_host` | `false` | Tell ESP32 devices (T3, T4, the ESP32 feeders) to reach the broker as `<productKey>.iot-as-mqtt.eu-central-1.aliyuncs.com` instead of the API host. Only useful if your DNS resolves that name to this host **and** the broker certificate covers it and is trusted by the device; otherwise leave it off. Linux models are never affected. |
 
 Payload capture and proxy mode are **not** options here. Both are things you turn on
 while watching a device, so they live in the panel's **Setup → Settings**, take
