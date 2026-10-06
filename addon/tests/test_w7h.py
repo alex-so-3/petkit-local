@@ -424,18 +424,21 @@ def test_the_esp32_fountains_keep_the_default_work_enum():
 
 def test_the_job_buttons_send_actions_the_firmware_accepts():
     """A `start_action` outside the whitelist is discarded by the device with
-    no reply, no error and no log — indistinguishable from a lost command."""
+    no reply, no error and no log — indistinguishable from a lost command.
+
+    The values are the official app's (capture 2026-10-04)."""
     from petkit_local.ha.commands import ALL_ACTIONS
 
     device = Device(device_type="w7h", petkit_id=1, serial_number="W")
     for key, expected in [("fountain_flush", 1),
                           ("fountain_refill", 2),
-                          ("fountain_water_change", 5)]:
+                          ("fountain_drain", 3)]:
         suffix, envelope = ALL_ACTIONS[key](device)
         assert suffix == "start"
         assert envelope["method"] == "thing.service.start"
         assert envelope["params"] == {"start_action": expected}
         assert expected in codes.FOUNTAIN_W7H_START_ACTIONS
+        assert codes.FOUNTAIN_W7H_APP_ACTIONS[expected][1] == codes.CONFIRMED
 
 
 def test_no_button_sends_an_action_that_is_not_a_job():
@@ -444,7 +447,7 @@ def test_no_button_sends_an_action_that_is_not_a_job():
     from petkit_local.ha.commands import ALL_ACTIONS
 
     device = Device(device_type="w7h", petkit_id=1, serial_number="W")
-    for key in ("fountain_flush", "fountain_refill", "fountain_water_change"):
+    for key in ("fountain_flush", "fountain_refill", "fountain_drain"):
         _, envelope = ALL_ACTIONS[key](device)
         assert envelope["params"]["start_action"] \
             not in codes.FOUNTAIN_W7H_START_ACTIONS_NOT_WORK
@@ -529,3 +532,280 @@ def test_the_fountain_events_seen_in_a_live_log_are_not_filed_as_other():
         assert code is not None, f"{name} has no row"
         assert code.kind != codes.KIND_OTHER, name
         assert "w7h" in code.families, f"{name} does not list the fountain"
+
+
+# --- matched to the official app (capture 2026-10-04, fw 456) ---------------
+
+def _w7h_index():
+    device = Device(device_type="w7h", petkit_id=1, serial_number="W")
+    return device, {e.key: e for e in get_entities_for_device(device)}
+
+
+def test_start_action_5_is_recorded_as_a_crash_and_can_never_be_built():
+    """`start_action: 5` dropped the MQTT session within 8 ms and rebooted the
+    device by watchdog, 3 times out of 3. It is still on the firmware's accept
+    list — which is what lets it reach the job that kills `ctrl`."""
+    from petkit_local.ha.commands import _fountain_start
+
+    assert 5 in codes.FOUNTAIN_W7H_START_ACTIONS
+    assert codes.FOUNTAIN_W7H_START_ACTIONS_CRASH[5][1] == codes.CONFIRMED
+    assert 5 not in codes.FOUNTAIN_W7H_APP_ACTIONS
+    with pytest.raises(ValueError):
+        _fountain_start(5)
+
+
+def test_no_action_anywhere_sends_start_action_5_to_a_w7h():
+    """Not just the W7H's own buttons: the panel posts any `ALL_ACTIONS` key by
+    name, without asking which family it belongs to."""
+    from petkit_local.ha.commands import ALL_ACTIONS
+
+    device = Device(device_type="w7h", petkit_id=1, serial_number="W")
+    assert "fountain_water_change" not in ALL_ACTIONS
+    for key, build in ALL_ACTIONS.items():
+        try:
+            result = build(device)
+        except ValueError:
+            continue
+        if result is None:
+            continue
+        _, envelope = result
+        params = envelope.get("params") or {}
+        assert params.get("start_action") not in codes.FOUNTAIN_W7H_START_ACTIONS_CRASH, key
+
+
+def test_only_an_app_action_can_be_built():
+    """Accepted by the firmware is not enough; 4 is on its list too and no
+    screen of the app sends it."""
+    from petkit_local.ha.commands import _fountain_start
+
+    for value in codes.FOUNTAIN_W7H_START_ACTIONS - set(codes.FOUNTAIN_W7H_APP_ACTIONS):
+        with pytest.raises(ValueError):
+            _fountain_start(value)
+
+
+def test_the_w7h_buttons_are_exactly_the_apps_three_jobs():
+    _, idx = _w7h_index()
+    buttons = sorted(k for k, e in idx.items() if e.component == "button")
+    assert buttons == ["fountain_drain", "fountain_flush", "fountain_refill"]
+
+
+def test_controls_the_app_does_not_have_are_gone():
+    _, idx = _w7h_index()
+    for key in ("fountain_water_change", "power_off", "power_on", "heater",
+                "disturb_mode", "vomit_detection", "wifi_light_assist"):
+        assert key not in idx, key
+    # Read-only, and not a control at all.
+    assert "heater_installed" in idx
+    # And nothing published writes a field the app never offers.
+    written = {e.setting_field for e in idx.values() if e.value_path.startswith("settings.")}
+    assert not written & codes.FOUNTAIN_W7H_SET_FIELDS_NOT_IN_APP
+
+
+def test_fountain_and_sleep_time_are_minutes_one_to_sixty():
+    """The app's pickers run 1-60 min (15, 28 and 60 captured). Hours 1-24 here
+    meant a picked 15 could not even be entered, and 12 meant something
+    different to each side."""
+    from petkit_local.devices.base import Refused
+    from petkit_local.ha.commands import handle_ha_command
+
+    device, idx = _w7h_index()
+    for key, field in (("fountain_time", "fountainTime"), ("sleep_time", "sleepTime")):
+        entity = idx[key]
+        assert (entity.unit, entity.min_value, entity.max_value) == ("min", 1, 60)
+        _, env = handle_ha_command(device, entity, "28")
+        assert env["params"] == {field: 28}
+        with pytest.raises(Refused):
+            handle_ha_command(device, entity, "61")
+        with pytest.raises(Refused):
+            handle_ha_command(device, entity, "0")
+    # The override replaced the family entity in place, not beside it.
+    keys = [e.key for e in get_entities_for_device(device)]
+    assert keys.count("fountain_time") == 1 and keys.count("sleep_time") == 1
+
+
+def test_volume_runs_one_to_nine():
+    from petkit_local.devices.base import Refused
+    from petkit_local.ha.commands import handle_ha_command
+
+    device, idx = _w7h_index()
+    assert (idx["volume"].min_value, idx["volume"].max_value) == (1, 9)
+    with pytest.raises(Refused):
+        handle_ha_command(device, idx["volume"], "0")
+
+
+def test_the_flow_mode_enum_is_the_apps():
+    _, idx = _w7h_index()
+    assert idx["flow_mode"].options == [
+        "do_not_flow", "continuous", "intermittent", "motion_activated"]
+
+
+@pytest.mark.parametrize("key,field", [
+    ("refill_disturb_period", "awDisturbMultiRange"),
+    ("signal_lights_disturb_period", "wlDisturbMultiRange"),
+    ("voice_disturb_period", "toneMultiRange"),
+])
+def test_a_quiet_window_is_written_in_the_shape_the_app_sends(key, field):
+    """Captured: `{"awDisturbMultiRange": "{\\"awDisturbMultiRange\\":[[0,600]]}"}`
+    — a JSON STRING wrapping its own key, minutes since midnight."""
+    from petkit_local.ha.commands import PROPERTY_SET_SUFFIX, handle_ha_command
+
+    device, idx = _w7h_index()
+    suffix, env = handle_ha_command(device, idx[key], "00:00-10:00")
+    assert suffix == PROPERTY_SET_SUFFIX
+    assert env["method"] == "thing.service.property.set"
+    assert env["params"] == {field: '{"%s":[[0,600]]}' % field}
+    # Stored where `dev_multi_config` serves it from, not in settings.
+    assert device.config["multi_config"][field] == [[0, 600]]
+    assert field not in device.config.get("settings", {})
+    assert defaults.multi_config_ranges(device)[field] == [[0, 600]]
+
+
+def test_a_quiet_window_crossing_midnight_round_trips():
+    """`[[1140, 660]]` is the app's 19:00-11:00."""
+    from petkit_local.ha.commands import format_ranges, parse_ranges
+
+    assert format_ranges([[1140, 660]]) == "19:00-11:00"
+    assert parse_ranges("19:00-11:00") == [[1140, 660]]
+    assert format_ranges([[0, 1440]]) == "00:00-24:00"
+    assert parse_ranges("00:00-24:00") == [[0, 1440]]
+    assert parse_ranges(" 22:00-07:00 , 12:00-13:30 ") == [[1320, 420], [720, 810]]
+    assert parse_ranges("") == []
+    assert format_ranges([]) == ""
+    # The weekly object a camera window takes has no text form.
+    assert format_ranges([{"enable": 1, "rpt": "1", "time": [[0, 1440]]}]) is None
+
+
+@pytest.mark.parametrize("bad", [
+    "19:00", "25:00-01:00", "24:30-01:00", "10:60-11:00", "a-b", "7-8", "10:5-11:00",
+    "19:00-11:00,", "-", "²:00-03:00", "10:00-10:00", "123:00-01:00",
+])
+def test_a_quiet_window_that_is_not_ranges_is_refused(bad):
+    from petkit_local.devices.base import Refused
+    from petkit_local.ha.commands import handle_ha_command
+
+    device, idx = _w7h_index()
+    with pytest.raises(Refused):
+        handle_ha_command(device, idx["refill_disturb_period"], bad)
+    assert "awDisturbMultiRange" not in (device.config.get("multi_config") or {})
+
+
+async def test_the_state_document_shows_the_window_the_device_is_served():
+    from petkit_local.devices.registry import DeviceRegistry
+    from petkit_local.ha.discovery import build_discovery_payload
+    from petkit_local.ha.publisher import HAPublisher
+
+    reg = DeviceRegistry()
+    device = reg.get_or_create(petkit_id=1, device_type="w7h", serial_number="W")
+    device.config["multi_config"] = {"awDisturbMultiRange": [[1140, 660]]}
+    doc = HAPublisher(reg, {})._build_state(device)["multi_config"]
+    assert doc["awDisturbMultiRange"] == "19:00-11:00"
+    assert doc["wlDisturbMultiRange"] == ""          # unset: no window
+    assert doc["toneMultiRange"] == "00:00-24:00"    # served default
+    assert "cameraMultiRange" not in doc
+
+    entity = next(e for e in get_entities_for_device(device)
+                  if e.key == "refill_disturb_period")
+    payload = build_discovery_payload(
+        entity=entity, device_id=1, device_type="w7h", device_name="W",
+        serial_number="W", state_topic="petkit-local/1/state")
+    assert "multi_config" in payload["value_template"]
+    assert payload["max"] == 255
+
+
+async def test_retired_entities_are_cleared_from_home_assistant():
+    """Leaving an entity out stops announcing it; HA keeps the retained config
+    and the entity — a button among them stays pressable. An empty retained
+    payload on the same topic is how HA is told it is gone."""
+    from petkit_local.devices.registry import DeviceRegistry
+    from petkit_local.ha.discovery import EntityDef, discovery_topic
+    from petkit_local.ha.publisher import HAPublisher
+    from tests._fakes import FakeMqttClient
+
+    reg = DeviceRegistry()
+    device = reg.get_or_create(petkit_id=7, device_type="w7h", serial_number="W")
+    pub = HAPublisher(reg, {})
+    pub._client = FakeMqttClient()
+    pub._connected = True
+    await pub.publish_discovery(device)
+
+    cleared = {topic for topic, payload, kw in pub._client.published
+               if payload == "" and kw.get("retain")}
+    for component, key in (("button", "fountain_water_change"), ("button", "power_off"),
+                           ("button", "power_on"), ("switch", "heater"),
+                           ("switch", "disturb_mode"), ("switch", "vomit_detection"),
+                           ("switch", "wifi_light_assist")):
+        topic = discovery_topic(EntityDef(component=component, key=key, name=key), 7,
+                                pub._prefix)
+        assert topic in cleared, key
+    # Nothing still published is cleared.
+    for entity in get_entities_for_device(device):
+        assert discovery_topic(entity, 7, pub._prefix) not in cleared, entity.key
+
+
+def test_retirement_is_per_model():
+    """A T5 keeps its power buttons; only the W7H retired them."""
+    from petkit_local.ha.categories import get_retired_entities_for_device
+
+    t5 = Device(device_type="t5", petkit_id=1, serial_number="T")
+    assert get_retired_entities_for_device(t5) == []
+    keys = {e.key for e in get_entities_for_device(t5)}
+    assert {"power_off", "power_on"} <= keys
+
+
+# --- seeding ----------------------------------------------------------------
+
+def test_a_w7h_is_served_no_invented_settings():
+    """Its `property/post` carries no settings, so a seed is never replaced by
+    the device's own value, and `to_device_info` serves the block back as its
+    configuration. `fountainMode: 0` is "do not flow"."""
+    from petkit_local.devices.payloads import to_device_info
+
+    device = Device(device_type="w7h", petkit_id=1, serial_number="W")
+    assert defaults.default_settings(device) == {}
+    served = to_device_info(device)["result"]["settings"]
+    for key in ("fountainMode", "addWaterSwitch", "heaterSwitch", "disturbMode"):
+        assert key not in served, key
+
+    # A value somebody chose is still served.
+    device.config["settings"] = {"fountainMode": 1}
+    assert to_device_info(device)["result"]["settings"]["fountainMode"] == 1
+
+
+def test_the_old_seed_is_taken_back_once_and_only_where_unchanged():
+    from petkit_local.devices.registry import DeviceRegistry
+
+    stored = {**defaults.RETIRED_W7H_SEED, "fountainMode": 1, "volume": 5,
+              "vomitDetection": 1, "wifiLightAssist": 0, "heaterSwitch": 1}
+    reg = DeviceRegistry()
+    reg._restore({"3": Device(device_type="w7h", petkit_id=3, serial_number="W",
+                              config={"settings": dict(stored)}).to_dict()})
+    settings = reg.get(3).config["settings"]
+    # Set by somebody (differs from the seed) — kept.
+    assert settings == {"fountainMode": 1, "volume": 5}
+
+    # Once: a 0 chosen after the cleanup survives the next load.
+    settings["fountainMode"] = 0
+    reg2 = DeviceRegistry()
+    reg2._restore(reg._serialize())
+    assert reg2.get(3).config["settings"]["fountainMode"] == 0
+
+
+def test_other_families_keep_their_seed():
+    t5 = Device(device_type="t5", petkit_id=1, serial_number="T")
+    assert defaults.retire_stale_seed(t5) == []
+    assert defaults.default_settings(t5)
+
+
+def test_a_zero_volume_is_dropped_with_the_old_seed():
+    device = Device(device_type="w7h", petkit_id=4, serial_number="W",
+                    config={"settings": {"volume": 0}})
+    assert defaults.retire_stale_seed(device) == ["volume"]
+    assert device.config["settings"] == {}
+
+
+def test_the_cycle_numbers_run_one_to_seven_days_like_the_app():
+    """Both of the app's cycle pickers offer 1-7 days (W7H fw 456, 2026-10-04)."""
+    device = Device(device_type="w7h", petkit_id=1, serial_number="W")
+    numbers = {e.key: e for e in get_entities_for_device(device) if e.component == "number"}
+    for key in ("water_change_cycle", "flush_cycle"):
+        assert (numbers[key].min_value, numbers[key].max_value, numbers[key].unit) == (1, 7, "d")

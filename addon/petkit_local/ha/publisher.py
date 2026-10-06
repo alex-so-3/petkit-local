@@ -29,13 +29,13 @@ from typing import TYPE_CHECKING, Any
 from petkit_local.devices import defaults
 from petkit_local.devices.base import Device
 from petkit_local.devices.registry import DeviceRegistry
-from petkit_local.ha.categories import get_entities_for_device
+from petkit_local.ha.categories import get_entities_for_device, get_retired_entities_for_device
 from petkit_local.ha.command_router import CommandRouter
 from petkit_local.ha.entities.ble import get_ble_entities
 from petkit_local.ha.entities.pet import PET_SENSORS
 from petkit_local.ha.discovery import build_discovery_payload, discovery_topic
 from petkit_local.devices.state_parsers import apply_consumable_state
-from petkit_local.ha.commands import LOCAL_DEFAULTS
+from petkit_local.ha.commands import LOCAL_DEFAULTS, multi_config_texts
 from petkit_local.utils.jsonio import read_bytes
 
 if TYPE_CHECKING:
@@ -257,7 +257,15 @@ class HAPublisher:
             )
             await self._emit(topic, json.dumps(payload), retain=True)
 
-        log.info("Published %d discovery configs for %s (id=%d)", len(entities), device.device_type, device.petkit_id)
+        # An empty retained config is how HA is told an entity is gone; leaving
+        # an entity out of the list above only stops announcing it.
+        retired = get_retired_entities_for_device(device)
+        for entity in retired:
+            await self._emit(discovery_topic(entity, device.petkit_id, self._prefix),
+                             "", retain=True)
+
+        log.info("Published %d discovery configs for %s (id=%d), cleared %d retired",
+                 len(entities), device.device_type, device.petkit_id, len(retired))
 
     async def unpublish_discovery(self, device: Device) -> None:
         """Remove every HA entity of `device` by publishing empty payloads."""
@@ -502,7 +510,8 @@ class HAPublisher:
         Returns:
             ``{"state": {...device telemetry...}, "settings": {...},
             "schedule": "<json string>", "feed_schedule": "<json string>",
-            "capabilities": {name: bool}, "local": {...}}``. The two schedules
+            "capabilities": {name: bool}, "local": {...},
+            "multi_config": {field: "HH:MM-HH:MM, ..."}}``. The two schedules
             are JSON *strings* on purpose: they back `text` entities, whose
             value is a string. The top-level keys are exactly the first segment
             of every EntityDef.value_path.
@@ -552,4 +561,7 @@ class HAPublisher:
             "feed_schedule": json.dumps(device.config.get("feed_schedule", {})),
             "capabilities": {ct: (ct in enabled) for ct in Device.CAPABILITY_TYPES},
             "local": {**LOCAL_DEFAULTS, **(device.config.get("local") or {})},
+            # The `*MultiRange` windows as `HH:MM-HH:MM`, for the range `text`
+            # entities (`ha/entities/text.py::FOUNTAIN_W7H_RANGE_TEXT`).
+            "multi_config": multi_config_texts(device),
         }

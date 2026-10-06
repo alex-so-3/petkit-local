@@ -95,31 +95,30 @@ FOUNTAIN_BUTTONS = [
 
 #: The W7H's water-treatment jobs, as `thing.service.start` actions.
 #:
-#: These are the only three of the twenty values its firmware accepts
-#: (`codes.FOUNTAIN_W7H_START_ACTIONS`) that anything names. 1 and 5 name
-#: themselves — `work_start_event_detect` gives each its own branch, log line
-#: and still (`fPro_flushStart.jpeg`, `fPro_changeStart.jpeg`). 2 is on the
-#: accept list but reaches that function's default branch, so "Refill" is the
-#: app's word for a value the firmware only lets through; if it turns out to
-#: mean something else, this is the button that is wrong.
+#: Exactly the three the official app offers, with the values it sends
+#: (`codes.FOUNTAIN_W7H_APP_ACTIONS`, from a capture of the app on 2026-10-04):
+#: Drain & flush is 1, Refill is 2, Drain is 3. After a Drain the FlowLift
+#: module stays raised until a Refill lowers it again — the app says so in as
+#: many words, so a Drain is half of a job, not a whole one.
 #:
-#: Deep clean is deliberately absent. The cycle exists (`ster_mode_*.aac`, the
-#: `disinfectState` field, "Boil ster over result" in the log) but no accepted
-#: action value can be tied to it, and it is the one job that needs a person
-#: standing there with a kettle.
+#: Three buttons this list used to carry are gone, and their keys must not come
+#: back (`ha/categories.py` retires their discovery topics):
+#:
+#:   * `fountain_water_change` sent `start_action: 5`. The app has no such
+#:     control, and on a real W7H it crashed `ctrl` three times out of three
+#:     (`codes.FOUNTAIN_W7H_START_ACTIONS_CRASH`).
+#:   * `power_off`/`power_on`. `power` is a service the firmware accepts, but no
+#:     screen of the app offers it, and a power-off is not a command to guess at.
+#:
+#: Deep clean is deliberately absent too. The cycle exists (`ster_mode_*.aac`,
+#: the `disinfectState` field, "Boil ster over result" in the log) but no
+#: accepted action value can be tied to it, and it is the one job that needs a
+#: person standing there with a kettle.
 FOUNTAIN_W7H_BUTTONS = [
-    EntityDef(component="button", key="fountain_flush", name="Flush",
+    EntityDef(component="button", key="fountain_flush", name="Drain & Flush",
               icon="mdi:water-sync"),
     EntityDef(component="button", key="fountain_refill", name="Refill",
               icon="mdi:water-plus"),
-    EntityDef(component="button", key="fountain_water_change", name="Water Change",
-              icon="mdi:water-boiler-alert"),
-    # What the removed `pause_fountain`/`resume_fountain` were reaching for.
-    # Those wrote `{"power": 0|1}` through `property.set`, and `power` is not
-    # among this firmware's set handlers, so they wrote a field nothing reads.
-    # It IS a service: `parse_service_invoke_msg` accepts `power` with a
-    # `power_action` of 0 or 1, on its own code path. Same two buttons the
-    # camera litter boxes get, for the same reason.
-    EntityDef(component="button", key="power_off", name="Power Off", icon="mdi:power-off"),
-    EntityDef(component="button", key="power_on", name="Power On", icon="mdi:power-on"),
+    EntityDef(component="button", key="fountain_drain", name="Drain",
+              icon="mdi:water-minus"),
 ]

@@ -40,8 +40,6 @@ const ENTITY_HELP = {
     "Listens for meowing while a cat is in the box and records when it heard some. PetKit frames repeated yowling as a possible sign of discomfort — it is a health signal, not a novelty. Beta in PetKit's app.",
   ph_detection:
     "Reads the colour of PetKit's own pH-indicator litter from the camera. With ordinary litter it measures nothing at all. Beta in PetKit's app.",
-  vomit_detection:
-    'Watches for vomiting. A detection result carries a `vomit_info` list, which stays empty while this is off.',
 };
 
 //: Values typed into a number control but not yet sent, keyed "<id>:<key>".

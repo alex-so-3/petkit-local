@@ -953,25 +953,17 @@ onChange('show-all-entities', el => {
 // them a home next to the recognition toggle they belong with, the way
 // capability switches get their own card.
 //
-// The three detections are what the NPU is asked to look for, not settings of
-// the machine around it: each one decides whether a class of event is raised at
-// all. `pet_detection` gates `pet_detect` and the `pet_time` stamp,
-// `drink_detection` gates `drink_start` and `drink_time`, and
-// `vomit_detection` fills the `vomit_info` array a `pet_discern` result
-// carries. Sitting in Controls they read like Auto Flush and Heater, which are
-// plumbing.
+// The detections are what the NPU is asked to look for, not settings of the
+// machine around it: each one decides whether a class of event is raised at
+// all. `pet_detection` gates `pet_detect` and the `pet_time` stamp, and
+// `drink_detection` gates `drink_start` and `drink_time`. Sitting in Controls
+// they read like Auto Flush, which is plumbing.
 //
 // `relocate` GUARDS ON supports_ai, and must. `pet_detection` also belongs to
 // the feeders (D4H/D4SH), which have a camera but no on-device AI and so get no
 // AI card — moving it unconditionally took the switch out of Controls and gave
 // it nowhere to go, removing it from the panel entirely.
-const AI_ENTITY_KEYS = [
-  'yowling_detection',
-  'ph_detection',
-  'pet_detection',
-  'drink_detection',
-  'vomit_detection',
-];
+const AI_ENTITY_KEYS = ['yowling_detection', 'ph_detection', 'pet_detection', 'drink_detection'];
 
 let _refreshT = null,
   _detailT = null;

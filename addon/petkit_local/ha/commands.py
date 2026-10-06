@@ -23,7 +23,8 @@ import logging
 import time
 from typing import Any
 
-from petkit_local.devices.base import Device, Refused
+from petkit_local.devices.base import Device, Refused, encode_multi_range
+from petkit_local.devices.defaults import multi_config_ranges
 from petkit_local.devices.state_parsers import record_consumable_reset
 from petkit_local.events import codes
 from petkit_local.ha.discovery import EntityDef
@@ -57,6 +58,15 @@ CAPABILITY_VALUE_PREFIX = "capabilities."
 # there is not a local default — it is pushed to hardware as a setting the
 # feeder never had and cannot be talked out of.
 LOCAL_VALUE_PREFIX = "local."
+
+# Do-not-disturb windows (`*MultiRange`) edited from HA as text. The value lives
+# in `config["multi_config"]`, the store `dev_multi_config` is served from (see
+# `devices/defaults.py::multi_config_ranges`), not in settings, and it is pushed
+# with `property.set` in the JSON-string shape every range field takes.
+MULTI_RANGE_VALUE_PREFIX = "multi_config."
+
+#: Minutes in a day. A range runs 0..1440 inclusive; 1440 is the end of the day.
+DAY_MINUTES = 24 * 60
 
 # `surplusControl` value -> the `surplusStandard` level it pairs with, from a
 # live D4SH capture of the app's own writes (2026-08-08). `0` (off) has no
@@ -176,8 +186,9 @@ def _device_power(on: bool) -> Command:
 
 
 #: Actions that are not one family's. Merged into `ALL_ACTIONS` alongside the
-#: per-category tables, so the litter and fountain buttons resolve to one
-#: implementation instead of two copies that can drift.
+#: per-category tables. Only the camera litter boxes publish them today: the
+#: W7H had them too, until the official app turned out to offer no power
+#: control (capture 2026-10-04).
 SHARED_ACTIONS = {
     "power_off": lambda device: _device_power(False),
     "power_on": lambda device: _device_power(True),
@@ -365,11 +376,20 @@ def _fountain_start(code: int) -> Command:
 
     The same `thing.service.start` envelope a litter box uses -- one service,
     one `start_action`, and the device tells them apart by which model it is.
-    The values are NOT the litter ones (`codes.FOUNTAIN_W7H_START_ACTIONS`);
-    2 is "refill" here and "deodorize" on a Purobot.
+    The values are NOT the litter ones; 2 is "refill" here and "deodorize" on
+    a Purobot.
+
+    Only the values the official app sends can be built
+    (`codes.FOUNTAIN_W7H_APP_ACTIONS`). Being on the firmware's accept list is
+    not enough: 5 is on it, and it crashes the device
+    (`codes.FOUNTAIN_W7H_START_ACTIONS_CRASH`).
     """
+    if code in codes.FOUNTAIN_W7H_START_ACTIONS_CRASH:
+        raise ValueError(f"start_action {code} crashes the W7H and is never sent")
     if code not in codes.FOUNTAIN_W7H_START_ACTIONS:
         raise ValueError(f"start_action {code} is not one the W7H accepts")
+    if code not in codes.FOUNTAIN_W7H_APP_ACTIONS:
+        raise ValueError(f"start_action {code} is not one the official app sends")
     return ("start", _envelope("thing.service.start", {"start_action": code}, ms_id=True))
 
 
@@ -377,10 +397,13 @@ FOUNTAIN_ACTIONS = {
     "reset_filter": lambda device: (PROPERTY_SET_SUFFIX, make_mqtt_property_set({"filterPercent": 100})),
     "pause_fountain": lambda device: (PROPERTY_SET_SUFFIX, make_mqtt_property_set({"power": 0})),
     "resume_fountain": lambda device: (PROPERTY_SET_SUFFIX, make_mqtt_property_set({"power": 1})),
-    # W7H only; no other fountain publishes these buttons.
+    # W7H only; no other fountain publishes these buttons. The values are the
+    # app's (`codes.FOUNTAIN_W7H_APP_ACTIONS`). There is deliberately no
+    # `fountain_water_change`: it sent 5, which the app never sends and which
+    # crashed the device every time it was pressed.
     "fountain_flush": lambda device: _fountain_start(1),
     "fountain_refill": lambda device: _fountain_start(2),
-    "fountain_water_change": lambda device: _fountain_start(5),
+    "fountain_drain": lambda device: _fountain_start(3),
 }
 
 ALL_ACTIONS = {**LITTER_ACTIONS, **FEEDER_ACTIONS, **FOUNTAIN_ACTIONS, **SHARED_ACTIONS}
@@ -445,6 +468,86 @@ def _coerce_time(payload: str) -> int | None:
         return None
     total = hours * 3600 + minutes * 60 + seconds
     return total if 0 <= total < DAY_SECONDS else None
+
+
+def _format_minute(minute: int) -> str:
+    return f"{minute // 60:02d}:{minute % 60:02d}"
+
+
+def format_ranges(value: Any) -> str | None:
+    """`[[start, end], ...]` in minutes as `HH:MM-HH:MM, HH:MM-HH:MM`.
+
+    The text an HA `text` entity shows for a `*MultiRange`. `[[1140, 660]]` is
+    `19:00-11:00`: an end below its start crosses midnight, exactly as the app
+    writes it. The end of the day is `24:00`, because that is what 1440 is.
+
+    Returns:
+        None for anything that is not a list of minute pairs — the weekly
+        object form a camera window takes, or a hand-edited `devices.json` —
+        so the caller can leave that field out rather than render nonsense.
+    """
+    if not isinstance(value, list):
+        return None
+    parts = []
+    for pair in value:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            return None
+        start, end = to_int(pair[0], None), to_int(pair[1], None)
+        if start is None or end is None or not (
+                0 <= start <= DAY_MINUTES and 0 <= end <= DAY_MINUTES):
+            return None
+        parts.append(f"{_format_minute(start)}-{_format_minute(end)}")
+    return ", ".join(parts)
+
+
+def multi_config_texts(device: Device) -> dict[str, str]:
+    """Every `*MultiRange` this device has, as the text `format_ranges` gives.
+
+    Resolved the way `dev_multi_config` serves them (`multi_config_ranges`), so
+    what HA and the panel show is what the device is told. A weekly-shaped
+    window (`cameraMultiRange`) has no text form and is left out.
+    """
+    return {key: text for key, value in multi_config_ranges(device).items()
+            if (text := format_ranges(value)) is not None}
+
+
+def _parse_minute(text: str) -> int | None:
+    hours, sep, minutes = text.strip().partition(":")
+    # ASCII digits only: `isdigit()` accepts "²", which `int()` then rejects.
+    if (not sep or not (hours.isascii() and hours.isdecimal() and len(hours) <= 2)
+            or not (minutes.isascii() and minutes.isdecimal()) or len(minutes) != 2):
+        return None
+    total = int(hours) * 60 + int(minutes)
+    return total if int(minutes) < 60 and total <= DAY_MINUTES else None
+
+
+def parse_ranges(payload: str) -> list[list[int]] | None:
+    """The inverse of `format_ranges`: `19:00-11:00, 00:00-06:00` -> minutes.
+
+    Empty text is an empty list — no window, which for a do-not-disturb means
+    nothing is silenced. Like the panel's schedule editor, this is strict about
+    the shape and permissive about the content: a range crossing midnight, a
+    one-minute range and several ranges are all things the app itself writes.
+
+    A range that starts where it ends is refused. Nothing says whether the
+    firmware reads `[[0, 0]]` as no time or as the whole day — the app writes
+    `[[0, 1440]]` for the whole day — so it is not something to send.
+
+    Returns:
+        None for anything that is not ranges of `HH:MM`, so the caller refuses
+        it instead of pushing a schedule nobody wrote.
+    """
+    text = str(payload).strip()
+    if not text:
+        return []
+    ranges: list[list[int]] = []
+    for part in text.split(","):
+        start_text, sep, end_text = part.partition("-")
+        start, end = _parse_minute(start_text), _parse_minute(end_text)
+        if not sep or start is None or end is None or start == end:
+            return None
+        ranges.append([start, end])
+    return ranges
 
 
 def _select_value(entity: EntityDef, payload: str) -> int | float | str | None:
@@ -542,6 +645,25 @@ def handle_ha_command(device: Device, entity: EntityDef, payload: str) -> Comman
         # field a feed puts its portion in is per model, and a table of
         # zero-argument lambdas is exactly what made that impossible to express.
         return action(device)
+
+    if comp == "text" and entity.value_path.startswith(MULTI_RANGE_VALUE_PREFIX):
+        target = entity.value_path[len(MULTI_RANGE_VALUE_PREFIX):]
+        # Only a window this model is served, and only one in pair form: a
+        # camera window is the weekly OBJECT shape, and pairs written over it
+        # would reach a parser that reads `rpt`/`time` off each element.
+        if format_ranges(multi_config_ranges(device).get(target)) is None:
+            log.warning("Entity '%s' targets %s, which is not a pair-form window "
+                        "of this device", entity.key, target)
+            return None
+        ranges = parse_ranges(payload)
+        if ranges is None:
+            raise Refused(f"{entity.name} must be HH:MM-HH:MM ranges, comma separated "
+                          f"(e.g. 22:00-07:00), or empty for none")
+        device.config.setdefault("multi_config", {})[target] = ranges
+        log.info("Setting %s=%s for device %d (stored + MQTT)",
+                 target, ranges, device.petkit_id)
+        return (PROPERTY_SET_SUFFIX, make_mqtt_property_set(
+            {target: encode_multi_range(target, ranges)}))
 
     if comp == "text":
         key = entity.value_path

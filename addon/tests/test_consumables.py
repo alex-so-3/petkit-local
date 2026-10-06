@@ -160,13 +160,16 @@ def test_a_settings_write_does_not_shrink_the_served_block():
     payload and the HA state document used to SUBSTITUTE the stored dict for
     the defaults rather than merge. So the first change to any setting cut
     `dev_device_info`'s settings block down to that one key — and the device
-    reads that block as its whole configuration. A fountain shows it worst:
-    it reports no settings of its own, so nothing refills the block.
+    reads that block as its whole configuration.
+
+    Pinned on a camera litter box, which has the largest seed. The W7H, which
+    this was first seen on, is no longer seeded at all
+    (`defaults.RETIRED_W7H_SEED`).
     """
     from petkit_local.devices.defaults import default_settings
     from petkit_local.devices.payloads import to_device_info
 
-    dev = Device(device_type="w7h", petkit_id=9)
+    dev = Device(device_type="t5", petkit_id=9)
     full = set(default_settings(dev))
     assert len(full) > 1
 

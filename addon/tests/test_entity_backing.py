@@ -55,13 +55,11 @@ UNSEEDED_BY_DESIGN = {
     # carries no settings at all — so there is nothing to seed from and any
     # number here would be a value we PUSH to somebody's fountain.
     "drinkDetection",
-    "vomitDetection",
     "autoFlush",
     "autoWaterChange",
     "cleanWaterLackLight",
     "cleanWaterEmptyLight",
     "wasteWaterFullLight",
-    "wifiLightAssist",
     "awDisturbMode",
     "wlDisturbMode",
     # The rest of the W7H's app-visible settings, from the capture-derived map
@@ -88,6 +86,21 @@ UNSEEDED_BY_DESIGN = {
     "toneMode",
     "volume",
     "language",
+    # The fountain family's own seed, which the W7H stopped receiving on
+    # 2026-10-04 (`defaults.RETIRED_W7H_SEED`): its `property/post` carries no
+    # settings, so every seeded value was served back by `to_device_info` as
+    # its configuration — `fountainMode: 0` is "do not flow", and
+    # `addWaterSwitch: 0` turns auto refill off. Each field is confirmed real by
+    # a capture of the official app (`codes.FOUNTAIN_W7H_APP_SET_FIELDS`); the
+    # value stays unknown until somebody sets it. `manualLock`, `lightMode`
+    # and `petDetection` are still seeded for the litter boxes and feeders.
+    "manualLock",
+    "lightMode",
+    "addWaterSwitch",
+    "petDetection",
+    "fountainMode",
+    "fountainTime",
+    "sleepTime",
     # Litter box. The app writes it, and the capture only ever saw it written
     # together with `petDetection` — so what it does on its own is unobserved,
     # and a seeded 0 or 1 would be us deciding.

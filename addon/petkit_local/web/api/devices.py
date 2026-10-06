@@ -18,10 +18,11 @@ from aiohttp import web
 from petkit_local.devices import defaults
 from petkit_local.devices.base import Device
 from petkit_local.devices.state_parsers import apply_consumable_state
+from petkit_local.events import codes
 from petkit_local.ha.categories import get_entities_for_device
 from petkit_local.ha.commands import (
     ALL_ACTIONS, PROPERTY_SET_SUFFIX, Refused, handle_ha_command,
-    make_mqtt_property_set,
+    make_mqtt_property_set, multi_config_texts,
 )
 from petkit_local.media.go2rtc import stream_urls_with_rtsp
 from petkit_local.mqtt.broker import delivery_view
@@ -55,8 +56,11 @@ if TYPE_CHECKING:
 # both are `thing.service.end`, i.e. the verbs that STOP whatever is running
 # and put the box back in service. Colouring the recovery button the same red
 # as the one you are recovering from is exactly backwards.
+#   * `fountain_drain` empties a W7H and leaves its FlowLift module raised
+#     until somebody runs Refill.
 DESTRUCTIVE_ACTIONS = {
     "dump_litter", "maintenance_start", "reset_n50", "reset_n60", "reset_desiccant",
+    "fountain_drain",
 }
 
 
@@ -76,6 +80,7 @@ def _state_doc(d: Device) -> dict[str, Any]:
         "schedule": d.config.get("schedule", []),
         "feed_schedule": d.config.get("feed_schedule", {}),
         "capabilities": {ct: (ct in enabled) for ct in d.CAPABILITY_TYPES},
+        "multi_config": multi_config_texts(d),
     }
 
 
@@ -304,6 +309,14 @@ async def api_send_command(request: web.Request) -> web.Response:
         # entity behind it.
         ent = next((e for e in get_entities_for_device(d)
                     if e.key == action and e.component == "button"), None)
+        if ent is None and d.device_type.lower() in codes.FOUNTAIN_NEXT_GEN:
+            # NOT the fallback for a W7H. Every litter action is a
+            # `start_action` too, and 4, 7, 9 and 10 are on this firmware's
+            # accept list — the same position 5 was in until it crashed the
+            # device (`codes.FOUNTAIN_W7H_START_ACTIONS_CRASH`). A W7H runs
+            # only the jobs its own buttons name.
+            return web.json_response(
+                {"error": f"{action} is not an action this device has"}, status=400)
         if ent is None:
             suffix, envelope = fn(d)
         else:

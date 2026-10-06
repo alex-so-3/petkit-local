@@ -993,14 +993,46 @@ WEEKDAY_NAMES: dict[int, str] = {
 #: `cmp #5` -> `/tmp/fPro_changeStart.jpeg`; everything else falls through to
 #: "get start event ---> add water", `/tmp/fPro_addStart.jpeg`.
 #:
-#: So 1 and 5 are named by the firmware. 2 is not: it is accepted by the
-#: command whitelist below but reaches the event detector's default branch, so
-#: "refill" is the app's meaning attached to a value the firmware only lets
-#: through. Graded accordingly — it is the one entry here that could be wrong.
+#: So 1 and 5 are named by the firmware. 2 and 3 are not: both reach the event
+#: detector's default branch. Their names come from the official app instead
+#: (`FOUNTAIN_W7H_APP_ACTIONS`), which sends 2 for Refill and 3 for Drain — so
+#: a `work_start` echoing either is that job. That the echo carries the value
+#: the app sent is inferred from 2, which arrives after a refill.
 FOUNTAIN_W7H_WORK_MODES: dict[int, str] = {
-    1: "flush",
-    2: "refill",
-    5: "water change",
+    1: "flush",            # confirmed: firmware branch `fPro_flushStart`
+    2: "refill",           # inferred: app sends 2 for Refill, echo seen after one
+    3: "drain",            # inferred: app sends 3 for Drain, echo assumed like 2
+    5: "water change",     # confirmed: firmware branch `fPro_changeStart`
+}
+
+#: Where the W7H rows below come from, when they say "the app capture".
+#:
+#: A proxy capture of PetKit's official app driving a real W7H (firmware 456)
+#: on 2026-10-04, read as the `thing.service.*` downlink the cloud sent for each
+#: control the app offers. Every screen was walked: settings, "More", camera
+#: basics, privacy, smart detection, voice, signal lights, refill, flush and
+#: water change.
+FOUNTAIN_W7H_APP_CAPTURE = "capture of the official app, 2026-10-04, fw 456"
+
+#: The `start_action` values the official app sends a W7H, graded.
+#:
+#: Unlike `FOUNTAIN_W7H_START_ACTIONS` this is not what the firmware accepts but
+#: what the app USES — the only three jobs it offers. Each is confirmed by
+#: `FOUNTAIN_W7H_APP_CAPTURE`:
+#:
+#:   * 1 is "Drain & flush" (the firmware's own `fPro_flushStart` branch);
+#:   * 2 is "Refill" — confirmed, where the firmware alone could only say the
+#:     value is let through;
+#:   * 3 is "Drain". After it the app says the FlowLift module stays raised
+#:     until a Refill is run, so a Drain on its own leaves the fountain empty
+#:     and lifted.
+#:
+#: Nothing may build a `start` for a W7H outside this table: see
+#: `FOUNTAIN_W7H_START_ACTIONS_CRASH` for what happens when something did.
+FOUNTAIN_W7H_APP_ACTIONS: dict[int, tuple[str, str]] = {
+    1: ("drain & flush", CONFIRMED),
+    2: ("refill", CONFIRMED),
+    3: ("drain", CONFIRMED),
 }
 
 #: Every `start_action` a W7H accepts, and nothing else.
@@ -1027,6 +1059,100 @@ FOUNTAIN_W7H_START_ACTIONS = frozenset({
 #: exit than every other value (`cmp r4,#7`), onto a different message queue.
 #: Neither belongs behind a button labelled with a cleaning cycle.
 FOUNTAIN_W7H_START_ACTIONS_NOT_WORK = frozenset({7, 32})
+
+#: Accepted by the whitelist above, and KNOWN TO CRASH the device. Never send.
+#:
+#: `start_action: 5` is what our "Water Change" button sent. The official app
+#: has no control that sends it (`FOUNTAIN_W7H_APP_ACTIONS`), and on a real W7H
+#: (fw 456) it took the device down 3 times out of 3 — 2026-09-27 22:16 and
+#: 22:17, 2026-10-02 22:21 UTC: the MQTT session dropped within 8 ms of the
+#: publish, the next boot reported `reboot_reason=3` (the watchdog's
+#: `reboot -f` on "ctrl err"), and the device signed up again 30-75 s later.
+#: Graded `confirmed`: the evidence is the crash, not a reading of the code.
+#:
+#: It stays in `FOUNTAIN_W7H_START_ACTIONS` because that set is the firmware's
+#: literal accept list, and being accepted is exactly what makes it dangerous —
+#: the value gets past the gate and into a job that kills `ctrl`.
+#:
+#: A hypothesis, not a fact: 5 is the work mode the firmware names "water
+#: change" (`fPro_changeStart`), so it may be the INTERNAL job behind the
+#: scheduled water change (`autoWaterChange` + `waterChangeTime`), which the
+#: device starts itself with whatever state it sets up first — state an
+#: app-style command does not provide.
+FOUNTAIN_W7H_START_ACTIONS_CRASH: dict[int, tuple[str, str]] = {
+    5: ("crashes ctrl (watchdog reboot, reboot_reason=3)", CONFIRMED),
+}
+
+#: The W7H's `property.set` fields as the official app writes them, graded,
+#: with what a value means. All `confirmed` by `FOUNTAIN_W7H_APP_CAPTURE`.
+#:
+#: Two things here are not what this add-on used to believe:
+#:
+#:   * `fountainTime` and `sleepTime` are MINUTES, 1-60 — the app's pickers run
+#:     1-60 min and the captured values were 15, 28 and 60. They were HOURS
+#:     1-24 here, so "12" meant something different to each side.
+#:   * `volume` runs 1-9 on the app's slider (captured 1, 9 and 2); 0 is not
+#:     something the app can send.
+#:
+#: The three `*MultiRange` fields carry the JSON-STRING shape every range field
+#: does (`devices/base.py::encode_multi_range`), e.g.
+#: `"{\"awDisturbMultiRange\":[[0,600]]}"`, MINUTES since local midnight.
+#:
+#: They are NOT in `FOUNTAIN_W7H_SET_FIELDS`, and that is not a conflict between
+#: the two sources but a gap in one: that map lists the scalar
+#: `===== set X (%d) =====` handlers, and no range field of any model is among
+#: them — on every model the ranges reach the device through the same
+#: `property.set` (proven on a T5, 2026-08-09) and through `dev_multi_config`,
+#: by a parser that map does not cover. Which W7H function reads them has not
+#: been named. The SHAPE is what the capture settles, and is what is graded.
+FOUNTAIN_W7H_APP_SET_FIELDS: dict[str, tuple[str, str]] = {
+    "fountainMode": ("0 do not flow, 1 continuous, 2 intermittent, "
+                     "3 motion-activated", CONFIRMED),
+    "fountainTime": ("intermittent flow period, minutes 1-60 (15, 28, 60 seen)",
+                     CONFIRMED),
+    "sleepTime": ("intermittent pause period, minutes 1-60 (15, 28, 60 seen)",
+                  CONFIRMED),
+    "volume": ("speaker volume, 1-9 (1, 9, 2 seen)", CONFIRMED),
+    "addWaterSwitch": ("auto refill, 0/1", CONFIRMED),
+    "awDisturbMode": ("refill do-not-disturb, 0/1", CONFIRMED),
+    "awDisturbMultiRange": ("refill do-not-disturb window, [[start, end]] "
+                            "minutes ([[1140, 660]] and [[0, 600]] seen)", CONFIRMED),
+    "wlDisturbMode": ("signal-lights do-not-disturb, 0/1", CONFIRMED),
+    "wlDisturbMultiRange": ("signal-lights do-not-disturb window, minutes "
+                            "([[0, 540]] seen)", CONFIRMED),
+    "toneMode": ("voice do-not-disturb, 0/1", CONFIRMED),
+    "toneMultiRange": ("voice do-not-disturb window, minutes ([[0, 1440]] seen)",
+                       CONFIRMED),
+    "manualLock": ("child lock, 0/1", CONFIRMED),
+    "lightMode": ("indicator light, 0/1", CONFIRMED),
+    "cleanWaterLackLight": ("low clean water light, 0/1", CONFIRMED),
+    "cleanWaterEmptyLight": ("empty clean water light, 0/1", CONFIRMED),
+    "wasteWaterFullLight": ("waste tank full light, 0/1", CONFIRMED),
+    "petDetection": ("pet detection, 0/1", CONFIRMED),
+    "drinkDetection": ("drink detection, 0/1", CONFIRMED),
+    "autoWaterChange": ("scheduled water change, 0/1", CONFIRMED),
+    "waterChangeTime": ("water change time, seconds since midnight (30600 seen)",
+                        CONFIRMED),
+    "waterChangeCycle": ("water change every N days (4 seen)", CONFIRMED),
+    "autoFlush": ("scheduled flush, 0/1", CONFIRMED),
+    "flushTime": ("flush time, seconds since midnight (39600 seen)", CONFIRMED),
+    "systemSoundEnable": ("voice prompts, 0/1", CONFIRMED),
+    "microLight": ("microphone indicator light, 0/1", CONFIRMED),
+    "timeDisplay": ("timestamp on video, 0/1", CONFIRMED),
+    "smartFrame": ("pet tracking, 0/1", CONFIRMED),
+}
+
+#: Set handlers the W7H's `ctrl` has (`FOUNTAIN_W7H_SET_FIELDS`) that the
+#: official app never offers on any of its screens (`FOUNTAIN_W7H_APP_CAPTURE`).
+#:
+#: A handler existing says the firmware would take a write; it does not say the
+#: hardware does anything with it, or that the app's owner can ever have seen
+#: the setting. Nothing here publishes an entity for these. The `power` service
+#: is in the same position: accepted by `parse_service_invoke_msg`, offered by
+#: no screen of the app.
+FOUNTAIN_W7H_SET_FIELDS_NOT_IN_APP = frozenset({
+    "heaterSwitch", "vomitDetection", "wifiLightAssist", "disturbMode",
+})
 
 
 def work_modes_for(device_type: str | None = None) -> dict[int, str]:

@@ -1,5 +1,56 @@
 # Changelog
 
+## Unreleased
+
+- **The W7H fountain's controls now match the official app**, checked against a
+  capture of PetKit's app driving a real W7H (firmware 456) on 2026-10-04, every
+  screen of it. The protocol facts are graded `confirmed` in `events/codes.py`.
+
+- **Water Change is gone, because it crashed the fountain.** The button sent
+  `start_action: 5`. The app has no control that sends it, and on a real W7H it
+  brought the device down three times out of three: the MQTT session dropped
+  within 8 ms, the watchdog rebooted it (`reboot_reason=3`), and it came back
+  30-75 s later. The value is now recorded as a known crash and nothing can
+  build it. The panel also stops running litter-box actions on a W7H by name:
+  several of them send values the W7H accepts but its app never uses. The
+  scheduled water change (Auto Water Change, its time and cycle) is unchanged.
+
+- **New Drain button** (`start_action: 3`, the app's "Drain"). As in the app,
+  the FlowLift module stays raised after a Drain until you run Refill, so the
+  panel asks before running it. Flush is
+  relabelled "Drain & Flush", the app's name for it. Refill (`2`) is now
+  confirmed rather than inferred.
+
+- **W7H Drain & Refill Cycle and Drain & Flush Cycle run 1-7 days**, the
+  official app's range for both pickers (fw 456). They were 1-30.
+
+- **Fountain Time and Sleep Time are minutes, 1-60.** They were hours, 1-24. The
+  app's pickers run 1-60 minutes and it was captured writing 15, 28 and 60.
+  **Volume** now runs 1-9, the app's slider, instead of 0-9.
+
+- **Do-not-disturb windows can be set from Home Assistant.** Three new text
+  entities, Quiet Refill Hours, Quiet Signal Lights Hours and Quiet Voice
+  Prompts Hours, take `HH:MM-HH:MM` (e.g. `22:00-07:00`; comma-separated for
+  several, empty for none) and send it in the exact shape the app does. They
+  show the same window as the panel's schedule editor. "Quiet Water Level
+  Alerts" is relabelled "Quiet Signal Lights", which is what the app calls it.
+
+- **Controls the app does not have are removed from the W7H, and cleared from
+  Home Assistant**: Heater, Do Not Disturb, Vomit Detection, WiFi Status Light,
+  Power Off and Power On. Each had a firmware handler but no screen in the app.
+  Their discovery configs are now emptied, so they disappear from HA rather than
+  lingering as orphans. The read-only Heater Installed sensor stays.
+
+- **A W7H is no longer served invented settings.** It was seeded with the
+  fountain family's defaults, including `fountainMode: 0` (do not flow) and
+  `addWaterSwitch: 0` (auto refill off). A W7H reports no settings of its own,
+  so those values were never replaced, and they went back to the device as its
+  configuration on every `dev_device_info`. New W7Hs get no seed. On existing
+  ones, any stored value still equal to its old seed is dropped once. A value
+  you set yourself is kept, unless it happens to equal the old seed. Those
+  controls read unknown until set. The same one-time cleanup drops the stored
+  values of the removed controls, and a volume of 0.
+
 ## 2.1.0 — 2026-08-12
 
 The YumShare Dual-Hopper (D4SH) camera feeder is now confirmed working, and most

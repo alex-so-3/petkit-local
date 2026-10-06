@@ -57,7 +57,9 @@ from petkit_local.ha.entities.switches import (
     LITTER_CAMERA_SWITCHES, LITTER_SWITCHES,
     PURIFIER_SWITCHES,
 )
-from petkit_local.ha.entities.text import FEEDER_SCHEDULE_TEXT, LITTER_SCHEDULE_TEXT
+from petkit_local.ha.entities.text import (
+    FEEDER_SCHEDULE_TEXT, FOUNTAIN_W7H_RANGE_TEXT, LITTER_SCHEDULE_TEXT,
+)
 from petkit_local.ha.entities.times import FOUNTAIN_W7H_TIMES
 from petkit_local.utils.const import (
     DEVICE_TYPES_FEEDER, DEVICE_TYPES_LITTER, DEVICE_TYPES_PURIFIER,
@@ -115,6 +117,23 @@ class CategorySpec:
     #: `tests/test_entity_backing.py` exists to catch. Excluding is not the same
     #: as deleting: the entity stays real for every other model in the family.
     model_excludes: tuple[tuple[str, frozenset[str]], ...] = ()
+    #: `(codename, entities)` a model USED to publish and no longer does, so
+    #: their retained discovery configs are cleared (`ha/publisher.py`).
+    #:
+    #: Leaving an entity out of the lists above stops it being announced; it
+    #: does not take it out of Home Assistant. Its discovery config is RETAINED
+    #: on HA's broker, so the entity would live on — and a button among them
+    #: would stay pressable forever. Only `component` and `key` matter here,
+    #: because they are all the discovery topic is built from.
+    model_retired: tuple[tuple[str, tuple[EntityDef, ...]], ...] = ()
+
+    def retired_for(self, has_camera: bool, device_type: str = "") -> list[EntityDef]:
+        """Entities this model retired, minus any it publishes again."""
+        codename = device_type.lower()
+        published = {(e.component, e.key)
+                     for e in self.entities_for(has_camera, device_type=codename)}
+        return [e for model, gone in self.model_retired if model == codename
+                for e in gone if (e.component, e.key) not in published]
 
     def entities_for(self, has_camera: bool, device_type: str = "") -> list[EntityDef]:
         """HA entity definitions for one device, in discovery order.
@@ -135,7 +154,21 @@ class CategorySpec:
             entities.extend(e for e in self.camera_entities if e.key not in excluded)
         for model, extra in self.model_entities:
             if model == codename:
-                entities.extend(extra)
+                for entity in extra:
+                    # A model entity sharing a key with a family one OVERRIDES it
+                    # where it stands, rather than being appended as a second
+                    # entity with the same unique_id: same key means the same HA
+                    # entity, and moving it to the end would reorder what a
+                    # camera model shares with its plain twin for no reason
+                    # (test_camera_bundle_is_appended_to_the_shared_base). The
+                    # W7H's `fountain_time`/`sleep_time`, minutes where the
+                    # family's are hours, are the case.
+                    at = next((i for i, e in enumerate(entities)
+                               if e.key == entity.key), None)
+                    if at is None:
+                        entities.append(entity)
+                    else:
+                        entities[at] = entity
         return entities
 
     def state_topics_for(self, has_camera: bool, device_type: str = "") -> list[str]:
@@ -309,7 +342,8 @@ CATEGORY_SPECS: dict[str, CategorySpec] = {
                      # EverSweet codename is Bluetooth-only and never becomes a
                      # Device at all.
                      *FOUNTAIN_W7H_CAMERA_SWITCHES, *FOUNTAIN_W7H_NUMBERS,
-                     *FOUNTAIN_W7H_SELECTS, *FOUNTAIN_W7H_TIMES)),
+                     *FOUNTAIN_W7H_SELECTS, *FOUNTAIN_W7H_TIMES,
+                     *FOUNTAIN_W7H_RANGE_TEXT)),
         ),
         # The water-treatment jobs. A live W7H sent `work_start` (2026-08-01)
         # and `add_water_over` a second after a `drink_start`; neither is a
@@ -355,7 +389,33 @@ CATEGORY_SPECS: dict[str, CategorySpec] = {
                 # stay excluded; what replaced them are the three job buttons
                 # in `FOUNTAIN_W7H_BUTTONS`, which use the `start` service.
                 "pause_fountain", "resume_fountain",
+                # Real set handlers (`codes.FOUNTAIN_W7H_SET_FIELDS`) that the
+                # official app offers on none of its screens
+                # (`codes.FOUNTAIN_W7H_SET_FIELDS_NOT_IN_APP`, capture
+                # 2026-10-04). The read-only `heater_installed` sensor stays.
+                "heater", "disturb_mode",
             })),
+        ),
+        # Published by earlier versions, cleared from HA now. Each was a
+        # control the official app does not have (capture 2026-10-04):
+        # `fountain_water_change` sent `start_action: 5`, which crashed the
+        # device every time (`codes.FOUNTAIN_W7H_START_ACTIONS_CRASH`); the
+        # power buttons drive a service no screen offers; the four switches
+        # wrote fields in `codes.FOUNTAIN_W7H_SET_FIELDS_NOT_IN_APP`.
+        model_retired=(
+            ("w7h", (
+                EntityDef(component="button", key="fountain_water_change",
+                          name="Water Change"),
+                EntityDef(component="button", key="power_off", name="Power Off"),
+                EntityDef(component="button", key="power_on", name="Power On"),
+                EntityDef(component="switch", key="vomit_detection",
+                          name="Vomit Detection"),
+                EntityDef(component="switch", key="wifi_light_assist",
+                          name="WiFi Status Light"),
+                EntityDef(component="switch", key="heater", name="Heater"),
+                EntityDef(component="switch", key="disturb_mode",
+                          name="Do Not Disturb"),
+            )),
         ),
     ),
     "purifier": CategorySpec(
@@ -409,6 +469,18 @@ def get_setting_fields(device: Device) -> set[str]:
         if e.component in ("switch", "number", "select") and e.setting_field:
             fields.add(e.setting_field)
     return fields
+
+
+def get_retired_entities_for_device(device: Device) -> list[EntityDef]:
+    """Entities this device used to publish, whose discovery must be cleared.
+
+    See `CategorySpec.model_retired`. Empty for a codename no category claims.
+    """
+    spec = spec_for_device(device)
+    if spec is None:
+        return []
+    return spec.retired_for(has_camera=device.is_camera,
+                            device_type=device.device_type)
 
 
 def get_mqtt_state_topics(device: Device) -> list[str]:

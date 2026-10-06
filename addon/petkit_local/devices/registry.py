@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 _UNREADABLE = object()
 
 
-def _merge_default_settings(device: Device) -> None:
+def _merge_default_settings(device: Device) -> bool:
     """Give a device every default settings key it is missing, in place.
 
     `setdefault("settings", ...)` only fires when the whole block is absent, so
@@ -32,12 +32,21 @@ def _merge_default_settings(device: Device) -> None:
     it less about itself than the real cloud does.
 
     Existing values are never overwritten: whatever the device or Home
-    Assistant last set stays authoritative, and only the gaps are filled.
+    Assistant last set stays authoritative, and only the gaps are filled. The
+    one exception is the old W7H seed (`defaults.retire_stale_seed`).
+
+    Returns:
+        True when that cleanup removed something, so the caller can persist it.
     """
+    removed = defaults.retire_stale_seed(device)
+    if removed:
+        log.info("Device %d: dropped the old %s seed %s, which it never reported",
+                 device.petkit_id, device.device_type, removed)
     settings = device.config.setdefault("settings", {})
     if isinstance(settings, dict):
         for key, value in defaults.default_settings(device).items():
             settings.setdefault(key, value)
+    return bool(removed)
 
 
 class PersistedRegistry:
@@ -382,6 +391,7 @@ class DeviceRegistry(PersistedRegistry):
             log.error("Device registry at %s is not a JSON object - starting empty",
                       self._persist_path)
             return
+        changed = False
         for key, d_data in data.items():
             try:
                 device = Device.from_dict(d_data)
@@ -392,6 +402,11 @@ class DeviceRegistry(PersistedRegistry):
                 continue
             if device.petkit_id <= 0:
                 continue  # drop phantom id=0 devices (created before the fix)
-            _merge_default_settings(device)
+            if _merge_default_settings(device):
+                changed = True
             self._devices[device.petkit_id] = device
+        if changed:
+            # Persist the one-time cleanup now rather than with the next
+            # unrelated write; a restart in between would only repeat it.
+            self.mark_dirty()
         log.info("Registry loaded: %d devices", len(self._devices))

@@ -206,11 +206,18 @@ FOUNTAIN_SWITCHES = [
 # None of these are seeded in `devices/defaults.py` for the same reason: the honest
 # state is unknown until the device reports one. See `UNSEEDED_BY_DESIGN` in
 # tests/test_entity_backing.py.
+#
+# A capture of the OFFICIAL app driving a W7H (2026-10-04, fw 456) has since
+# confirmed every field left here, with its 0/1 meaning
+# (`codes.FOUNTAIN_W7H_APP_SET_FIELDS`). It also removed two: `vomitDetection`
+# and `wifiLightAssist` have set handlers, but no screen of the app offers
+# either, and neither does it offer the family's `heaterSwitch` or
+# `disturbMode` (`codes.FOUNTAIN_W7H_SET_FIELDS_NOT_IN_APP`). A handler says
+# the firmware would take the write, not that the setting is real on this
+# hardware. `ha/categories.py` retires their HA entities.
 FOUNTAIN_W7H_SWITCHES = [
     EntityDef(component="switch", key="drink_detection", name="Drink Detection",
               value_path="settings.drinkDetection", icon="mdi:cup-water"),
-    EntityDef(component="switch", key="vomit_detection", name="Vomit Detection",
-              value_path="settings.vomitDetection", icon="mdi:emoticon-sick"),
     EntityDef(component="switch", key="auto_flush", name="Auto Flush",
               value_path="settings.autoFlush", icon="mdi:water-sync"),
     EntityDef(component="switch", key="auto_water_change", name="Auto Water Change",
@@ -226,15 +233,15 @@ FOUNTAIN_W7H_SWITCHES = [
     EntityDef(component="switch", key="waste_water_full_light", name="Waste Full Light",
               value_path="settings.wasteWaterFullLight", icon="mdi:lightbulb-alert",
               entity_category="config"),
-    EntityDef(component="switch", key="wifi_light_assist", name="WiFi Status Light",
-              value_path="settings.wifiLightAssist", icon="mdi:wifi",
-              entity_category="config"),
-    # Do-not-disturb for two specific subsystems, alongside the general
-    # `disturb_mode` switch above.
+    # Do-not-disturb for two specific subsystems. `aw` is the refill (the app's
+    # "Refill" screen), `wl` the signal lights (its "Signal lights" screen) —
+    # the key says "water level" from before the app named it, and keys are
+    # user state, so only the label follows. Each has a window, the matching
+    # text entity in `text.py::FOUNTAIN_W7H_RANGE_TEXT`.
     EntityDef(component="switch", key="refill_disturb_mode", name="Quiet Refill",
               value_path="settings.awDisturbMode", icon="mdi:bell-off",
               entity_category="config"),
-    EntityDef(component="switch", key="water_level_disturb_mode", name="Quiet Water Level Alerts",
+    EntityDef(component="switch", key="water_level_disturb_mode", name="Quiet Signal Lights",
               value_path="settings.wlDisturbMode", icon="mdi:bell-off",
               entity_category="config"),
 ]

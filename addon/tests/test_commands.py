@@ -456,8 +456,14 @@ def test_power_is_its_own_service_not_a_settings_write():
     """The removed `pause_fountain`/`resume_fountain` wrote `{"power": 0|1}`
     through `property.set`, to a field no firmware has a set handler for — so
     they were delivered and dropped. `power` IS a service, on its own code
-    path, and that is the difference this test pins."""
-    for device_type in ("t5", "w7h"):
+    path, and that is the difference this test pins.
+
+    The W7H no longer gets the buttons at all: no screen of the official app
+    offers power (capture 2026-10-04)."""
+    w7h = Device(device_type="w7h", petkit_id=5, serial_number="SN")
+    assert not {"power_off", "power_on"} & set(_settable_index(w7h))
+
+    for device_type in ("t5",):
         dev = Device(device_type=device_type, petkit_id=4, serial_number="SN")
         dev.config.setdefault("settings", defaults.default_settings(dev))
         idx = _settable_index(dev)

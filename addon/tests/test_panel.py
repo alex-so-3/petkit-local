@@ -405,6 +405,28 @@ async def test_only_costly_actions_are_flagged_destructive_and_they_sort_last():
         await c.close()
 
 
+async def test_the_panel_runs_only_a_w7hs_own_actions_on_it():
+    """The panel posts any `ALL_ACTIONS` key by name. Every litter action is a
+    `start_action`, and 4, 7, 9 and 10 are on the W7H's accept list — where 5
+    was, until it crashed the device. So a W7H takes only its own buttons."""
+    reg = DeviceRegistry()
+    reg.get_or_create(petkit_id=1, device_type="w7h", serial_number="SN")
+    app, reg, hub = _panel(reg=reg, bridge=None)
+    c = await _mk_client(app)
+    try:
+        for action in ("level_litter", "light", "maintenance_start", "reset_n60",
+                       "power_off", "cleaning_start"):
+            r = await c.post("/api/devices/1/command", data=json.dumps({"action": action}))
+            assert r.status == 400, action
+        assert not reg.get(1).command_queue
+        r = await c.post("/api/devices/1/command", data=json.dumps({"action": "fountain_drain"}))
+        out = await r.json()
+        assert out["ok"], out
+        assert "\"start_action\": 3" in json.dumps(reg.get(1).command_queue[-1])
+    finally:
+        await c.close()
+
+
 async def test_command_sender_queues_without_bridge():
     reg = DeviceRegistry()
     reg.get_or_create(petkit_id=1, device_type="t5", serial_number="SN")

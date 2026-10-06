@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+from petkit_local.events.codes import FOUNTAIN_NEXT_GEN
 from petkit_local.utils.const import DEVICE_TYPES_FEEDER_DUAL
 
 if TYPE_CHECKING:  # `devices.ble` imports `devices.registry`, which imports `devices.base`.
@@ -61,9 +62,9 @@ MULTI_RANGE_DEFAULTS: dict[str, Any] = {
     "distrubMultiRange": [],
     # A W7H's two quiet windows: `aw` is addWater (the firmware keeps
     # `awDisturb*` in the same vocabulary as `addWaterMode`, `addWaterSwitch`
-    # and `addWaterTimeAllow`), `wl` is unresolved — the whole image holds
-    # three `wl` tokens and none of them says what it stands for, so it stays
-    # unnamed rather than guessed at.
+    # and `addWaterTimeAllow`), `wl` the signal lights — the image never says,
+    # but the official app's "Signal lights" screen is what writes it
+    # (capture 2026-10-04).
     #
     # Empty for the same reason `distrubMultiRange` is: these SILENCE a job,
     # and an empty window silences nothing. Both are gated by their own
@@ -160,16 +161,99 @@ def default_settings(device: Device) -> dict[str, Any]:
             })
         return base
     if device.is_water_fountain:
-        return {
-            "manualLock": 0, "lightMode": 0, "disturbMode": 0,
-            "addWaterSwitch": 0, "petDetection": 0, "heaterSwitch": 0,
-            "fountainMode": 0, "fountainTime": 12, "sleepTime": 12,
-        }
+        if device.device_type.lower() in FOUNTAIN_NEXT_GEN:
+            # NOTHING for a W7H — see `RETIRED_W7H_SEED` for what this was and
+            # why every value in it was an instruction rather than a default.
+            return {}
+        return dict(_FOUNTAIN_SEED)
     if device.is_purifier:
         return {
             "lightMode": 0, "manualLock": 0, "sound": 0,
         }
     return {}
+
+
+#: The fountain family's seed. Never reaches a real device today: the W7H is the
+#: only fountain with WiFi and is not seeded, and the rest are Bluetooth-only
+#: and never become a `Device` (`utils/const.py::DEVICE_TYPES_BLE_ONLY`). Kept
+#: so a WiFi EverSweet that turns up starts where the family always did.
+_FOUNTAIN_SEED: dict[str, Any] = {
+    "manualLock": 0, "lightMode": 0, "disturbMode": 0,
+    "addWaterSwitch": 0, "petDetection": 0, "heaterSwitch": 0,
+    "fountainMode": 0, "fountainTime": 12, "sleepTime": 12,
+}
+
+#: What a W7H was seeded with until 2026-10-04, and is no longer.
+#:
+#: A W7H's `property/post` carries no settings at all, so nothing ever replaced
+#: these with the device's own values — and `to_device_info` serves the settings
+#: block back to the device as its configuration, on every `dev_device_info`,
+#: including the one after each reboot. Every entry was therefore a write we
+#: made on the owner's behalf, and two were actively harmful:
+#:
+#:   * `fountainMode: 0` is "do not flow" (`codes.FOUNTAIN_W7H_APP_SET_FIELDS`):
+#:     a running fountain told to stop pumping by a value nobody chose;
+#:   * `addWaterSwitch: 0` turns auto refill OFF.
+#:
+#: Not seeding is the only value that is not a guess: the HA entity reads
+#: unknown until somebody sets it, as every other W7H setting already does
+#: (`UNSEEDED_BY_DESIGN` in tests/test_entity_backing.py). Whether the firmware
+#: reads a key ABSENT from that block as 0 or keeps its own value is not known;
+#: if it reads 0, leaving the key out is no worse than serving the 0 was.
+#:
+#: The registry also takes these values BACK from a W7H that was registered
+#: while they were seeded (`retire_stale_seed`), because a stored seed is served
+#: exactly like a stored choice.
+RETIRED_W7H_SEED: dict[str, Any] = dict(_FOUNTAIN_SEED)
+
+#: `config` flag recording that `retire_stale_seed` has run for a device, so a
+#: value somebody sets AFTER it — `fountainMode: 0` on purpose — is kept.
+RETIRED_SEED_FLAG = "retired_seed_cleared"
+
+
+#: Stored W7H settings dropped whatever their value: written by entities that
+#: no longer exist because the official app has no such control
+#: (`codes.FOUNTAIN_W7H_SET_FIELDS_NOT_IN_APP`). Left in place they would keep
+#: being served by `to_device_info` with nothing left to change them.
+_RETIRED_W7H_FIELDS = frozenset({
+    "heaterSwitch", "disturbMode", "vomitDetection", "wifiLightAssist",
+})
+
+
+def retire_stale_seed(device: Device) -> list[str]:
+    """Drop the old W7H seed from a device's stored settings, once.
+
+    Only a value still EQUAL to what was seeded is dropped: anything else was
+    set by Home Assistant or the panel and stays. A value that happens to equal
+    the seed because somebody chose it is dropped too, and that is the price of
+    a migration with no record of where a value came from — it costs that
+    entity reading unknown until set again, never a write to the device.
+
+    Also dropped, whatever their value: the fields of the retired controls
+    (`_RETIRED_W7H_FIELDS`), and a `volume` of 0, which is below the app's
+    slider and now outside the entity's own range.
+
+    Returns:
+        The keys removed, for the caller to log. Empty for anything but a W7H,
+        and on every run after the first.
+    """
+    if device.device_type.lower() not in FOUNTAIN_NEXT_GEN:
+        return []
+    if device.config.get(RETIRED_SEED_FLAG):
+        return []
+    device.config[RETIRED_SEED_FLAG] = True
+    settings = device.config.get("settings")
+    if not isinstance(settings, dict):
+        return []
+    removed = [key for key, seeded in RETIRED_W7H_SEED.items()
+               if key in settings and settings[key] == seeded]
+    removed += sorted(key for key in _RETIRED_W7H_FIELDS
+                      if key in settings and key not in removed)
+    if "volume" in settings and settings["volume"] == 0:
+        removed.append("volume")
+    for key in removed:
+        del settings[key]
+    return removed
 
 
 def multi_config_ranges(device: Device) -> dict[str, Any]:
@@ -262,10 +346,9 @@ def schedule_targets(device: Device) -> list[dict[str, Any]]:
         Raw-only: `it` was an empty list in every capture and nothing here
         is going to guess what a meal item looks like.
 
-    A W7H has five of these and gets none of them yet. Its `ctrl` reads them
-    and the app writes them, but the `dev_multi_config` branch that would
-    serve them back is PR #18's — offering an editor for a schedule this
-    add-on cannot answer with would be the confusing half of the feature.
+    A W7H gets every range `multi_config_ranges` serves it; its three quiet
+    windows are also HA text entities (`FOUNTAIN_W7H_RANGE_TEXT`), which write
+    the same store, so both show the same window.
     """
     labels = {
         "lightMultiRange": "Screen Period" if device.is_litter else "Indicator Light Period",
@@ -274,12 +357,13 @@ def schedule_targets(device: Device) -> list[dict[str, Any]]:
         "cameraMultiRange": "Shooting Period",
         "cameraMultiNew": "Shooting Period",
         "detectMultiRange": "Detection Period",
-        # `aw` is addWater, from the firmware's own vocabulary. `wl` is NOT
-        # resolved -- the image holds three `wl` tokens and none of them says
-        # what it abbreviates -- so the label stays the wire name rather than
-        # inventing a friendly one that might be wrong.
+        # `aw` is addWater, from the firmware's own vocabulary. `wl` is not
+        # named anywhere in the image -- three `wl` tokens and none of them
+        # says what it abbreviates. The official app does: its "Signal lights"
+        # screen writes `wlDisturbMode`/`wlDisturbMultiRange` (capture
+        # 2026-10-04), so the label is the app's.
         "awDisturbMultiRange": "Water Top-Up Undisturbed Period",
-        "wlDisturbMultiRange": "wlDisturb Undisturbed Period",
+        "wlDisturbMultiRange": "Signal Lights Undisturbed Period",
     }
     weekly = {"cameraMultiRange", "cameraMultiNew"}
 
