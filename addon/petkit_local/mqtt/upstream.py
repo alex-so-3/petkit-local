@@ -52,6 +52,7 @@ import ssl
 import time
 from typing import TYPE_CHECKING, Any, Callable
 
+from petkit_local.ha.learn import learn_settings
 from petkit_local.http.redact import redact_mqtt
 from petkit_local.mqtt.auth import compute_aliyun_sign
 from petkit_local.mqtt.topics import (
@@ -66,6 +67,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from petkit_local.devices.base import Device
     from petkit_local.devices.registry import DeviceRegistry
     from petkit_local.events.store import EventStore
+    from petkit_local.ha.publisher import HAPublisher
     from petkit_local.http.redact import RedactionPolicy
     from petkit_local.web.hub import EventHub
 
@@ -227,10 +229,14 @@ class UpstreamMQTT:
                  publish_local: Callable[[str, bytes], Any],
                  hub: EventHub | None = None,
                  event_store: EventStore | None = None,
-                 live_config: dict[str, Any] | None = None) -> None:
+                 live_config: dict[str, Any] | None = None,
+                 ha_publisher: HAPublisher | None = None) -> None:
         """Wire the collaborators; nothing connects until `start()`.
 
         Args:
+            ha_publisher: Told when a relayed `property.set` taught us a
+                setting (`_learn_from_downlink`). None (`--no-ha`) still learns;
+                it only skips the publish.
             policy_factory: Builds the redaction policy for one device. A
                 callable rather than a value because the policy reads live
                 settings that the panel can change mid-session.
@@ -244,6 +250,7 @@ class UpstreamMQTT:
         self._publish_local = publish_local
         self._hub = hub
         self._event_store = event_store
+        self._ha_publisher = ha_publisher
         self._live_config = live_config if live_config is not None else {}
         self._tasks: dict[int, asyncio.Task] = {}
         # The live client per device, present only while that connection is up.
@@ -520,6 +527,46 @@ class UpstreamMQTT:
             self._hub.record_mqtt(device.petkit_id, local_topic, result.body,
                                   outbound=True, client=device.mqtt_device_name,
                                   origin="the real cloud")
+
+        # Last: after the publish and the panel record, so recording what the
+        # device was told can never delay, change or hide telling it.
+        await self._learn_from_downlink(device, parsed, result.body)
+
+    async def _learn_from_downlink(self, device: Device, parsed: Any, body: Any) -> None:
+        """Record the settings a relayed `thing.service.property.set` carried.
+
+        This is how the official app changes a setting, and for a device that
+        reports none of its own (a W7H) it is the only way Home Assistant can
+        find out what the owner chose (`ha/learn.py`). Read from the REDACTED
+        body, the one the device was actually given.
+
+        Observation only, and never fatal: the frame has already gone down
+        untouched, and a learning failure costs a log line, not the relay.
+        Gated on `wanted()` as well as on this bridge running at all, so a
+        frame still in flight as proxy mode is switched off teaches nothing.
+        """
+        if parsed is None or parsed.category != "service" or parsed.detail != "property/set":
+            return
+        if not self.wanted():
+            return
+        try:
+            frame = json.loads(_as_bytes(body))
+            if not isinstance(frame, dict):
+                return
+            if frame.get("method", "thing.service.property.set") != "thing.service.property.set":
+                return
+            learned = learn_settings(device, frame.get("params"),
+                                     source="the cloud's property.set (proxy)")
+            if not learned:
+                return
+            self._registry.mark_dirty()
+            if self._ha_publisher is not None:
+                await self._ha_publisher.publish_state(device)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Could not learn settings from a relayed property.set "
+                          "for device %d", device.petkit_id)
 
     async def _block_ota(self, device: Device, topic: str, raw: bytes) -> None:
         """Refuse a firmware push and keep a record of it.

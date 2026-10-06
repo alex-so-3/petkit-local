@@ -115,6 +115,19 @@ Two rules about placement that the map does not make obvious:
   endpoint nobody expected it on. Only *blocked* rules are persisted — the address, MQTT, STS and
   timezone rewrites fire on routine polling, so recording each one would bury the attempts that
   matter. Proxy mode and capture are configured ONLY from the panel; no add-on option, no CLI flag.
+- **Proxy mode LEARNS settings, it never changes what is relayed.** A device that reports no
+  settings of its own (a W7H) is only ever told them by the cloud, so `ha/learn.py` records the
+  fields of a relayed `thing.service.property.set` (`mqtt/upstream.py`) and of a served proxied
+  `dev_device_info` `settings` block (`http/middleware/proxy.py`) exactly as an HA write would, from
+  the REDACTED body (MQTT: after the frame is published; HTTP: before the reply is returned, which
+  it never changes). Allow-listed to `settings.` fields the device's own entities read plus the
+  `*MultiRange` windows `schedule_targets` offers; `timezone` is never learned
+  (`Device.timezone_offset` has its own precedence). A `property.set` overwrites; a
+  `dev_device_info` only fills fields never stored, because the account still holds the old value
+  of anything set from HA while proxied. Applies to every model; only the W7H depends on it.
+  Nothing is learned with proxy mode off.
+  A cloud `user/get` push and a proxied `dev_multi_config` are NOT learned from yet: neither shape
+  has been captured for this purpose.
 - **A heartbeat delivering a command is never forwarded in proxy mode.** `pop_commands` is
   destructive and at-most-once and has already run by the time forwarding could start, so ANY await
   between the pop and the send can lose the command — and `wait_for_heartbeat`, which watches the

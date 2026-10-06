@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- **Proxy mode now teaches Home Assistant the settings you change in PetKit's
+  app.** A W7H reports none of its settings, so its controls only ever showed
+  what was last set from HA. With proxy mode on, every setting the cloud sends
+  the device (`property.set` over MQTT, and the `settings` block of a proxied
+  `dev_device_info`) is now recorded the same way an HA write is, and the
+  entities and the panel's schedule editor update, do-not-disturb windows
+  included. Only fields the device has a control for are kept, the cloud's
+  `timezone` is ignored, and the device receives exactly what it did before.
+  `dev_device_info` only fills settings never set, so it cannot undo a change
+  made from HA while proxied. This applies to every model, though only the W7H
+  needed it. Each learned value is logged
+  (`learned <field>=<value> from ...`). Nothing changes with proxy mode off.
+
 ## 2.1.0 — 2026-08-12
 
 The YumShare Dual-Hopper (D4SH) camera feeder is now confirmed working, and most

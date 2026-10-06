@@ -490,6 +490,27 @@ def _bounds_text(entity: EntityDef) -> str:
     return f"at most {entity.max_value}"
 
 
+def store_setting(device: Device, field: str, value: Any) -> None:
+    """Record one `settings` field as the device's current value.
+
+    The optimistic write every settings control makes, and the one proxy mode's
+    observer makes for a value the official app sent (`ha/learn.py`): both are
+    a value the device has just been told, so both land where
+    `to_device_info` and the HA entities read it.
+    """
+    device.config.setdefault("settings", {})[field] = value
+
+
+def store_multi_range(device: Device, target: str, value: list) -> None:
+    """Record one `*MultiRange` window where `dev_multi_config` serves it from.
+
+    `config["multi_config"]`, not settings — see
+    `devices/defaults.py::multi_config_ranges`. The panel's schedule editor and
+    `ha/learn.py` both write through here, so both show the same window.
+    """
+    device.config.setdefault("multi_config", {})[target] = value
+
+
 def handle_ha_command(device: Device, entity: EntityDef, payload: str) -> Command | None:
     """Route one HA command for `entity`, mutating `device` where it applies.
 
@@ -645,6 +666,6 @@ def handle_ha_command(device: Device, entity: EntityDef, payload: str) -> Comman
         log.warning("Could not coerce payload %r for entity '%s'", payload, entity.key)
         return None
 
-    device.config.setdefault("settings", {})[field] = value
+    store_setting(device, field, value)
     log.info("Setting %s=%s for device %d (optimistic + MQTT)", field, value, device.petkit_id)
     return (PROPERTY_SET_SUFFIX, make_mqtt_property_set({field: value}))

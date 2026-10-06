@@ -8,10 +8,12 @@ the capture. `http/proxy.py` does the transport; this module does the policy.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 from aiohttp import web
 
+from petkit_local.ha.learn import learn_settings
 from petkit_local.http.dns import loops_back
 from petkit_local.http.handlers._common import request_device
 from petkit_local.http.handlers.heartbeat import carries_commands
@@ -75,6 +77,11 @@ GUARDED_LOCAL_ENDPOINTS = frozenset({"dev_upload_file_info_v2"})
 #: Request headers echoed into the capture record — the ones `http/proxy.py`
 #: forwards, so a capture shows exactly what upstream was told.
 _FORWARDED_HEADERS = ("X-Device", "X-Session", "F-Session", "User-Agent", "Content-Type")
+
+#: Seconds the HA publish after a learned `dev_device_info` may hold up the
+#: device's reply. The value is stored either way; a late publish only waits
+#: for the next state publish.
+_LEARN_PUBLISH_TIMEOUT = 2.0
 
 
 def _reports_a_local_log_upload(request: web.Request, config: dict) -> bool:
@@ -264,6 +271,9 @@ async def proxy_middleware(request: web.Request, handler: Handler) -> web.Stream
                      f", error {exchange.error.get('code')}" if exchange.error else "")
             return local
 
+        if request.path.rstrip("/").rsplit("/", 1)[-1] == "dev_device_info":
+            await _learn_from_device_info(request, device, exchange)
+
         return exchange.to_response()
     except asyncio.CancelledError:
         raise
@@ -433,3 +443,43 @@ def _remember_upstream_credentials(request: web.Request, device, exchange) -> No
         log.debug("Incomplete upstream MQTT credentials from %s, ignoring", request.path)
         return
     store.put(device.petkit_id, creds)
+
+
+async def _learn_from_device_info(request: web.Request, device, exchange) -> None:
+    """Record the settings a proxied `dev_device_info` reply is serving.
+
+    That reply's `settings` block is the device's whole configuration as
+    PetKit's account holds it, and for a device that reports no settings of
+    its own (a W7H) it is the one place they can be read (`ha/learn.py`). Read
+    from the REDACTED body, the one the device is about to be given, and only
+    for a reply it is actually given (`exchange.usable`).
+
+    A SNAPSHOT, so it only fills fields nothing has stored yet
+    (`learn_settings(only_missing=True)`): in proxy mode a write from Home
+    Assistant reaches the device but not PetKit's account, and the cloud's
+    older value must not revert it.
+
+    Observation only: the response is built from `exchange` either way, and a
+    failure here costs a log line, never the answer. It runs before the reply
+    is returned, so the HA publish is bounded (`_LEARN_PUBLISH_TIMEOUT`).
+    """
+    try:
+        reply = json.loads(exchange.body)
+        result = reply.get("result") if isinstance(reply, dict) else None
+        settings = result.get("settings") if isinstance(result, dict) else None
+        learned = learn_settings(device, settings,
+                                 source="the cloud's dev_device_info (proxy)",
+                                 only_missing=True)
+        if not learned:
+            return
+        registry = request.app.get("registry")
+        if registry is not None:
+            registry.mark_dirty()
+        ha_publisher = request.app.get("ha_publisher")
+        if ha_publisher is not None:
+            await asyncio.wait_for(ha_publisher.publish_state(device),
+                                   _LEARN_PUBLISH_TIMEOUT)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.exception("PROXY: could not learn settings from %s", request.path)

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+from petkit_local.utils.coerce import to_int
 from petkit_local.utils.const import DEVICE_TYPES_FEEDER_DUAL
 
 if TYPE_CHECKING:  # `devices.ble` imports `devices.registry`, which imports `devices.base`.
@@ -314,3 +315,66 @@ def schedule_targets(device: Device) -> list[dict[str, Any]]:
             "dual": device.device_type in DEVICE_TYPES_FEEDER_DUAL,
         })
     return targets
+
+
+#: Minutes in a day. A schedule range runs 0..1440 inclusive — 1440 is the end
+#: of the day and appears in every "entire day" payload PetKit sends.
+DAY_MINUTES = 24 * 60
+
+
+def clean_range_list(value: Any) -> list[list[int]] | None:
+    """`[[start, end], ...]` in minutes, or None if it is not that.
+
+    Deliberately permissive about the CONTENT and strict about the SHAPE. An
+    end below its start crosses midnight and is normal; a one-minute window
+    ([0, 1]) came straight out of the app; several windows at once are what the
+    do-not-disturb capture contained. So nothing here sorts, merges, or drops a
+    range for looking odd — the only rejections are values that are not minutes
+    in a day, because those are the ones the firmware cannot mean.
+    """
+    if not isinstance(value, list):
+        return None
+    cleaned: list[list[int]] = []
+    for pair in value:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            return None
+        start, end = to_int(pair[0], None), to_int(pair[1], None)
+        if start is None or end is None:
+            return None
+        if not (0 <= start <= DAY_MINUTES and 0 <= end <= DAY_MINUTES):
+            return None
+        cleaned.append([start, end])
+    return cleaned
+
+
+def clean_weekly_list(value: Any) -> list[dict[str, Any]] | None:
+    """`[{enable, rpt, time: [[s, e]]}]` — ranges plus weekdays and a switch.
+
+    `rpt` is a comma-separated list of weekday numbers where SUNDAY IS 1
+    (`events/codes.py::WEEKDAY_NAMES`). It is rebuilt from the parsed numbers
+    rather than passed through, so a client cannot smuggle a string into a field
+    the firmware splits on commas.
+    """
+    if not isinstance(value, list):
+        return None
+    cleaned: list[dict[str, Any]] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            return None
+        times = clean_range_list(entry.get("time"))
+        if times is None:
+            return None
+        days = []
+        for part in str(entry.get("rpt", "")).split(","):
+            day = to_int(part, None)
+            if day is None or not (1 <= day <= 7):
+                return None
+            days.append(day)
+        if not days:
+            return None
+        cleaned.append({
+            "enable": int(bool(to_int(entry.get("enable", 1), 1))),
+            "rpt": ",".join(str(d) for d in sorted(set(days))),
+            "time": times,
+        })
+    return cleaned

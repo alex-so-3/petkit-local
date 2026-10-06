@@ -16,77 +16,20 @@ from aiohttp import web
 
 from petkit_local.devices import defaults
 from petkit_local.devices.base import encode_multi_range
-from petkit_local.ha.commands import PROPERTY_SET_SUFFIX, make_mqtt_property_set
+from petkit_local.devices.defaults import (
+    DAY_MINUTES,
+    clean_range_list as _clean_range_list,
+    clean_weekly_list as _clean_weekly_list,
+)
+from petkit_local.ha.commands import PROPERTY_SET_SUFFIX, make_mqtt_property_set, store_multi_range
 from petkit_local.http.handlers.feed import _build_latest, _compute_next_tick
 from petkit_local.utils.coerce import to_int
 from petkit_local.web.api._common import _deliver, _device_or_404, _json_body
 
 
-#: Minutes in a day. A schedule range runs 0..1440 inclusive — 1440 is the end
-#: of the day and appears in every "entire day" payload PetKit sends.
-DAY_MINUTES = 24 * 60
-
 #: Seconds in a day — the unit of a feeder meal's `t`, alone among the
 #: schedule shapes (see `_clean_feed_schedule`).
 DAY_SECONDS = 24 * 3600
-
-
-def _clean_range_list(value: Any) -> list[list[int]] | None:
-    """`[[start, end], ...]` in minutes, or None if it is not that.
-
-    Deliberately permissive about the CONTENT and strict about the SHAPE. An
-    end below its start crosses midnight and is normal; a one-minute window
-    ([0, 1]) came straight out of the app; several windows at once are what the
-    do-not-disturb capture contained. So nothing here sorts, merges, or drops a
-    range for looking odd — the only rejections are values that are not minutes
-    in a day, because those are the ones the firmware cannot mean.
-    """
-    if not isinstance(value, list):
-        return None
-    cleaned: list[list[int]] = []
-    for pair in value:
-        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
-            return None
-        start, end = to_int(pair[0], None), to_int(pair[1], None)
-        if start is None or end is None:
-            return None
-        if not (0 <= start <= DAY_MINUTES and 0 <= end <= DAY_MINUTES):
-            return None
-        cleaned.append([start, end])
-    return cleaned
-
-
-def _clean_weekly_list(value: Any) -> list[dict[str, Any]] | None:
-    """`[{enable, rpt, time: [[s, e]]}]` — ranges plus weekdays and a switch.
-
-    `rpt` is a comma-separated list of weekday numbers where SUNDAY IS 1
-    (`events/codes.py::WEEKDAY_NAMES`). It is rebuilt from the parsed numbers
-    rather than passed through, so a client cannot smuggle a string into a field
-    the firmware splits on commas.
-    """
-    if not isinstance(value, list):
-        return None
-    cleaned: list[dict[str, Any]] = []
-    for entry in value:
-        if not isinstance(entry, dict):
-            return None
-        times = _clean_range_list(entry.get("time"))
-        if times is None:
-            return None
-        days = []
-        for part in str(entry.get("rpt", "")).split(","):
-            day = to_int(part, None)
-            if day is None or not (1 <= day <= 7):
-                return None
-            days.append(day)
-        if not days:
-            return None
-        cleaned.append({
-            "enable": int(bool(to_int(entry.get("enable", 1), 1))),
-            "rpt": ",".join(str(d) for d in sorted(set(days))),
-            "time": times,
-        })
-    return cleaned
 
 
 def _clean_point_list(value: Any) -> list[dict[str, Any]] | None:
@@ -262,7 +205,7 @@ async def api_save_schedule(request: web.Request) -> web.Response:
         d.config["schedule"] = value
         params = {"schedule": json.dumps(value, separators=(",", ":"))}
     else:
-        d.config.setdefault("multi_config", {})[target] = value
+        store_multi_range(d, target, value)
         params = {target: encode_multi_range(target, value)}
     reg.save()
 

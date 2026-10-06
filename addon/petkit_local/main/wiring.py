@@ -210,6 +210,7 @@ def build_services(config: Config, args: argparse.Namespace) -> Services:
         upstream_mqtt = UpstreamMQTT(
             registry, upstream_creds, partial(_proxy_policy, app_config), publish_local,
             hub=hub, event_store=event_store, live_config=app_config,
+            ha_publisher=ha_publisher,
         )
         mqtt_bridge = MQTTBridge(
             registry, ha_publisher, ble_registry,
