@@ -8,7 +8,7 @@ VALID_COMPONENTS = {
     "event", "text", "image", "time",
 }
 
-DEVICE_TYPES = ["t5", "t6", "t7", "t3", "t4", "d4h", "d4sh", "d3", "d4", "w7h", "w5", "k2", "k3"]
+DEVICE_TYPES = ["t5", "t6", "t7", "t3", "t4", "d4h", "d4sh", "d3", "d4", "d4s", "w7h", "w5", "k2", "k3"]
 
 # Golden entity counts per device type. An entity's identity in Home Assistant
 # is its unique_id, so silently dropping, adding or renaming one orphans it in
@@ -61,7 +61,7 @@ EXPECTED_ENTITY_COUNTS = {
     # t6 +6 on 2026-08-12: the bagging mechanism it reports in every
     # property post and nothing here read. No other litter box has it.
     "t3": 46, "t4": 46, "t5": 82, "t6": 89, "t7": 82,
-    "feeder": 25, "feedermini": 25, "d3": 25, "d4": 25, "d4s": 25,
+    "feeder": 25, "feedermini": 25, "d3": 25, "d4": 25, "d4s": 29,
     # 2026-08-12: replaced `enable_feed_video` button with individual switches
     # (feed_picture, eat_video, voice_prompt, voice_disturb_mode, disturb_mode)
     # and added selected_sound number + play_sound button. Net +6.

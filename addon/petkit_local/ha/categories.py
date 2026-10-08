@@ -226,6 +226,9 @@ CATEGORY_SPECS: dict[str, CategorySpec] = {
             "move_detect", "pet_detect",
         ),
         model_entities=(
+            # D4S accepts amount1/amount2 for a manual feed. Portion controls
+            # stay local rather than seeding unverified ESP32 settings.
+            ("d4s", (*FEEDER_DUAL_BUTTONS, *FEEDER_DUAL_NUMBERS)),
             # The embedded-Linux feeders report a dozen fields the ESP32 ones
             # do not; `state_parsers.FEEDER_NEXT_GEN_FIELDS` is what fills them.
             # The hopper-level sensors differ by hopper count: a D4H gets the

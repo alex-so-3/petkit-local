@@ -9,7 +9,7 @@ import { onAction } from './delegate.js';
 // would be wrong the first time a model shipped a different board.
 // 1. PetKit Ingenic devices (T5/T6/T7/D4H/D4SH/W7H): framed JSON written to
 //    0xAAA2, answered on 0xAAA1.
-// 2. PetKit ESP32 devices (T4, D4): PetKit JSON carried as custom
+// 2. PetKit ESP32 devices (T4, D4, D4S): PetKit JSON carried as custom
 //    data on service 0xFFFF, write 0xFF01, notify 0xFF02.
 //
 const BLE_SERVICE = '0000aaa0-0000-1000-8000-00805f9b34fb';
@@ -137,18 +137,9 @@ async function loadProvision() {
 // message is only meaningful once the context is secure, because that is the
 // only situation in which the absence of the API means what it says.
 function provisionWarning(hasBt, secure) {
-  const HOSTED = 'https://petkit.2442.pl';
-  const hosted =
-    ' Or use the hosted provisioning page at <a href="' +
-    HOSTED +
-    '" target="_blank"><code>' +
-    HOSTED +
-    '</code></a>, which runs entirely in your browser and talks to the device over Bluetooth — it never sees your Wi-Fi password.';
   if (!secure)
     return {
-      card:
-        '⚠ Web Bluetooth only works on a <b>secure page</b>, and this one is plain HTTP. Serve Home Assistant over HTTPS with your own certificate — provisioning then works from this tab, Ingress included. You will need <b>Chrome or Edge</b> as well; a plain-HTTP page cannot tell whether you have one, because the browser hides Web Bluetooth entirely until the page is secure.' +
-        hosted,
+      card: '⚠ Web Bluetooth only works on a <b>secure page</b>, and this one is plain HTTP. Serve Home Assistant over HTTPS with a trusted certificate, or access this panel through a localhost proxy on the computer with Bluetooth. You will need <b>Chrome or Edge</b> as well; a plain-HTTP page cannot tell whether you have one, because the browser hides Web Bluetooth entirely until the page is secure.',
       tooltip: 'Web Bluetooth needs a secure page, and this one is plain HTTP. See the note above.',
     };
   if (!hasBt)
@@ -219,7 +210,7 @@ function provisionUrlWarning(value) {
     const port = u.port || (u.protocol === 'http:' ? '80' : u.protocol === 'https:' ? '443' : '');
     if (port && port !== '80') {
       out.push(
-        '⚠ ESP32 devices such as T4 and D4 require the API server on port <b>80</b>. Provisioning them will fail with this URL.',
+        '⚠ ESP32 devices such as T4, D4 and D4S require the API server on port <b>80</b>. Provisioning them will fail with this URL.',
       );
     }
   } catch (e) {

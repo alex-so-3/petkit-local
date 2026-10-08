@@ -423,10 +423,7 @@ async def test_heartbeat_still_delivers_commands_while_clearing_the_flag():
 
 
 async def test_all_iot_device_info_endpoints_return_ali_wrapped():
-    """The cloud returns ``{result: {ali: {...}}}`` for every device, including
-    those calling ``dev_iot_device_info`` (confirmed on a D4SH capture). The
-    previous flat format was an assumption from localkit that no capture
-    supported."""
+    """Keep the captured ali-wrapped response for existing device routes."""
     reg = DeviceRegistry()
     client = await _client(reg)
     try:
@@ -437,6 +434,20 @@ async def test_all_iot_device_info_endpoints_return_ali_wrapped():
             assert "ali" in res, f"{ep} should return ali-wrapped"
             ali = res["ali"]
             assert ali["productKey"] and ali["deviceSecret"] and ali["mqttHost"]
+    finally:
+        await client.close()
+
+
+async def test_d4s_iot_device_info_returns_flat_esp32_credentials():
+    reg = DeviceRegistry()
+    client = await _client(reg)
+    try:
+        await client.post("/6/d4s/dev_signup", headers=HDR)
+        r = await client.post("/6/d4s/dev_iot_device_info", headers=HDR)
+        result = (await r.json())["result"]
+        assert "ali" not in result
+        assert result["productKey"] and result["deviceSecret"]
+        assert result["mqttHost"] == "server"
     finally:
         await client.close()
 

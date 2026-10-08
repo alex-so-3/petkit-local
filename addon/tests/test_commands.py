@@ -230,6 +230,23 @@ def test_a_dual_hopper_is_asked_per_hopper_and_never_with_plain_amount():
     assert env["params"]["amount2"] == 1
 
 
+def test_gemini_dual_controls_use_portions_without_seeding_device_settings():
+    """D4S is a dual hopper, but does not run the D4SH's Linux firmware."""
+    d = Device(device_type="d4s", petkit_id=2, serial_number="F")
+    idx = _settable_index(d)
+    assert {"feed_hopper_1", "feed_hopper_2", "hopper1_portions",
+            "hopper2_portions"} <= idx.keys()
+
+    assert handle_ha_command(d, idx["hopper1_portions"], "2") is None
+    assert handle_ha_command(d, idx["hopper2_portions"], "3") is None
+    suffix, env = handle_ha_command(d, idx["feed"], "")
+    assert suffix == "feed_realtime"
+    assert {"amount1": 2, "amount2": 3}.items() <= env["params"].items()
+    assert "amount" not in env["params"]
+    assert "feedAmount1" not in d.config.get("settings", {})
+    assert defaults.schedule_targets(d)[-1]["dual"] is True
+
+
 def test_a_single_hopper_feeder_is_unchanged():
     """The other half of the same fix, and the one with a live blast radius.
 

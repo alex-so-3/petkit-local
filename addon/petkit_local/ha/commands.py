@@ -237,7 +237,9 @@ def _feed(device: Device, amount1: int, amount2: int = 0) -> Command:
 
     Which field carries the portion is per model, and getting it wrong is
     silent — the device accepts the command, runs a feed cycle and dispenses
-    nothing. From `parse_service_invoke_msg` in a D4SH 867 `ctrl`:
+    nothing. A live D4S on firmware 1.198 dispensed one portion from hopper 1
+    with `amount1: 1, amount2: 0`. From `parse_service_invoke_msg` in a D4SH
+    867 `ctrl`:
 
     - it compares its own model string against `"D4SH"`, and that branch reads
       `amount1` and `amount2` verbatim, one per hopper, no scaling. PetKit's

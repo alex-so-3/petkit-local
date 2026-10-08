@@ -80,8 +80,12 @@ other model below is inference until the same is true of it.
 | EverSweet Ultra AI | W7H | ✅ | ✅ |
 | EverSweet Max Cordless | CTW3 † | — | — |
 | YumShare Dual-Hopper | D4SH | ✅ | — |
+| Fresh Element Gemini | D4S | — | — |
 
 Confirmed is not the same as complete: there can still be bugs, and features that are missing.
+The D4S Gemini has completed a local one-portion feed over HTTP heartbeats.
+Leave the default device-facing MQTT TLS listener enabled; the unit tested here
+failed to resume heartbeats after one restart with it disabled.
 
 **Should work.** Same firmware family, and the protocol was verified against their firmware — but
 nobody has run one.
@@ -106,7 +110,7 @@ to sit at "unknown".
 | YumShare Solo 2 | D4H | ✅ | ✅ |
 | YumShare Dual-Hopper 2 | D4SH | ✅ | ✅ |
 | Fresh Element Solo | D4 | — | — |
-| Feeder D3 / D4s | D3, D4S | — | — |
+| Feeder D3 | D3 | — | — |
 | Feeder / Feeder Mini | feeder, feedermini ‡ | — | — |
 | Pura Air smart spray | K2, K3 † | — | — |
 

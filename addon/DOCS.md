@@ -47,6 +47,13 @@ PetKit device ──HTTP───► petkit-local ──MQTT discovery──► 
 | `mqtt_tls_port` | `443` | Port for that listener. Change this and the matching port mapping together if your device dials a different one. |
 | `mqtt_strict_auth` | `false` | Enforce the Aliyun HMAC signature. Off by default so a signature nuance cannot lock a device out. |
 
+Fresh Element Gemini D4S firmware 1.198 was tested with the default
+`mqtt_tls: true`. It uses HTTP heartbeats for state and commands; no device MQTT
+session was observed. A one-portion command to hopper 1 dispensed food, but
+the completion event reported zero in both `real_amount` fields. Treat reported
+dispense quantities as unverified on this model. Disabling `mqtt_tls` caused a
+signup loop after one restart, so leave it enabled.
+
 Payload capture and proxy mode are **not** options here. Both are things you turn on
 while watching a device, so they live in the panel's **Setup → Settings**, take
 effect immediately, and persist to `/data/settings_overrides.json`.
@@ -81,8 +88,9 @@ only if you want to `curl` the JSON API while debugging.
 Web Bluetooth provisioning needs a secure context. This app deliberately does
 not manufacture one for you with a second, self-signed HTTPS port — that would
 publish the whole API to the LAN again. Provisioning needs Home Assistant served
-over HTTPS with a certificate your browser trusts; the Provision tab explains
-this and links a hosted alternative when it is not.
+over HTTPS with a certificate your browser trusts. A localhost proxy on the
+computer with Bluetooth also counts as a secure context. The Provision tab
+explains this when Home Assistant is served over plain HTTP.
 
 Port 9000 likewise accepts uploads without authentication — it stands in for
 Aliyun OSS, whose credentials this app issues to the device itself.
@@ -156,9 +164,9 @@ provisioned without it stamps UTC onto its video until it is re-provisioned.
 Web Bluetooth only runs on a **secure page**, so this needs Home Assistant served
 over HTTPS with a certificate your browser trusts (a reverse proxy, or Home
 Assistant's own TLS). With one in place it works from the sidebar as usual,
-Ingress included. Over plain HTTP the tab says so and points at a hosted build of
-the same page, which runs entirely in your browser and talks to the device over
-Bluetooth — your Wi-Fi password is never sent anywhere.
+Ingress included. A localhost proxy on the computer with Bluetooth is another
+secure context. The previously linked hosted page is for camera-equipped Linux
+models and does not support ESP32 feeders such as the D4S Gemini.
 
 Chrome or Edge only, on desktop or Android. Firefox, Safari and iOS have no Web
 Bluetooth at all.
