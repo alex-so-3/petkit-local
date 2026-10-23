@@ -365,7 +365,11 @@ def test_a_command_id_stays_within_signed_int32():
     from petkit_local.ha.commands import ALL_ACTIONS
     device = Device(device_type="d4sh", petkit_id=1, serial_number="F")
     for name, make in ALL_ACTIONS.items():
-        result = make(device)
+        target = device
+        if name == "finish_litter_calibration":
+            target = Device(device_type="t4", petkit_id=2, online=True)
+            target.state = {"workingState": -1, "petInTime": 0}
+        result = make(target)
         if result is None:
             continue
         _suffix, envelope = result

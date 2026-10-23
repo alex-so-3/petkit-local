@@ -24,6 +24,11 @@ LITTER_BUTTONS = [
     EntityDef(component="button", key="level_litter", name="Level Litter", icon="mdi:format-align-bottom"),
 ]
 
+LITTER_T4_BUTTONS = [
+    EntityDef(component="button", key="finish_litter_calibration",
+              name="Finish Litter Calibration", icon="mdi:scale-balance"),
+]
+
 #: Litter-box actions that need the camera generation's hardware.
 #:
 #: `light` is the illuminator: LBCommand calls 7 LIGHT and three isolated taps

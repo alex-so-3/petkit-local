@@ -56,6 +56,13 @@ onAction('send-action', el =>
   ),
 );
 async function sendAction(el, id, action, destructive, name) {
+  if (
+    action === 'finish_litter_calibration' &&
+    !confirm(
+      'Fill litter to the MAX line, double-press OK on the device, and wait for leveling to finish. Confirm the current litter level as full?',
+    )
+  )
+    return;
   if (destructive && !confirm('Send "' + name + '" to the device?')) return;
   post(id, { action }, r => {
     const msg = r.ok

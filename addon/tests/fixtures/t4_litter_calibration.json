@@ -1,0 +1,29 @@
+{
+  "description": "Minimal T4/1.652 HTTP sequence observed on stock hardware. Identifiers and epoch are replaced; unrelated telemetry and credentials are omitted.",
+  "before": {
+    "litter": {"usedTimes": 62, "percent": 27, "sandType": 1},
+    "device": {"sw": 1, "pet_in_time": 0}
+  },
+  "events": [
+    {
+      "eventType": "3",
+      "timestamp": 1700000000,
+      "content": {"reason": 2, "pos": 0, "action": 6},
+      "state": {
+        "litter": {"usedTimes": 62, "percent": 27, "sandType": 1},
+        "device": {"sw": 1, "pet_in_time": 0},
+        "work_state": {"work_mode": 6, "work_reason": 0, "work_process": 10, "stop_time": 600, "safe_warn": -1}
+      }
+    },
+    {
+      "eventType": "18",
+      "timestamp": 1700000002,
+      "content": {"key": 0, "start_time": 1700000001, "start_reason": 2, "result": 1, "err": null},
+      "state": {
+        "litter": {"usedTimes": 0, "percent": 100, "sandType": 1},
+        "device": {"sw": 1, "pet_in_time": 0},
+        "work_state": {"work_mode": 6, "work_reason": 0, "work_process": 10, "stop_time": 600, "safe_warn": -1}
+      }
+    }
+  ]
+}

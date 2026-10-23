@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import time
 import urllib.parse
@@ -434,12 +435,68 @@ def apply_state_snapshot(device: Device, state: Any) -> bool:
     device.state.update(state)  # raw, for the panel's Debug info and the echoes
     device.state.update(parse_state_report(device.device_type, state))
     device.state.update(normalize_property_params(device.device_type, state))
+    _clear_completed_t4_calibration(device)
     apply_consumable_state(device)
     device.last_state_report = time.time()
     return True
 
 
-def apply_derived_state(device: Device, event_type: str, content: dict) -> None:
+def _clear_completed_t4_calibration(device: Device) -> None:
+    """An authentic completion wins over mode 6 retained in later snapshots."""
+    if (device.device_type.lower() != "t4"
+            or device.state.get("workingState") != codes.T4_LITTER_CALIBRATION_MODE):
+        return
+    local = device.config.get("local")
+    history = local.get("litter_calibration") if isinstance(local, dict) else None
+    if not isinstance(history, dict):
+        return
+    completed = to_float(history.get("completed_at"), 0)
+    started = to_float(history.get("started_at"), float("inf"))
+    if completed >= started:
+        device.state["workingState"] = -1
+
+
+def _apply_t4_calibration_event(device: Device, event_type: str, content: dict,
+                                event_time: Any) -> None:
+    """Remember actual calibration events, never a guessed fill percentage.
+
+    Persist only completion metadata, not telemetry/liveness. A later mode-6
+    snapshot must not resurrect a finished operation, including after restart.
+    The next genuine start supersedes that completion. Buffered events must
+    neither backdate history nor finish a more recent calibration.
+    """
+    if device.device_type.lower() != "t4":
+        return
+    code = codes.lookup(event_type, device.device_type)
+    starting = (code is not None and code.role == codes.ROLE_START
+                and content.get("action") == codes.T4_LITTER_CALIBRATION_MODE)
+    completing = str(event_type) == codes.T4_LITTER_CALIBRATION_EVENT
+    if not starting and not completing:
+        return
+    now = time.time()
+    timestamp = now if event_time is None else to_float(event_time, None)
+    if (timestamp is None or not math.isfinite(timestamp) or timestamp > now + 300
+            or timestamp < device.last_state_report - 60):
+        return
+    local = device.config.setdefault("local", {})
+    if not isinstance(local, dict):
+        return
+    history = local.setdefault("litter_calibration", {})
+    if not isinstance(history, dict):
+        return
+    key = "started_at" if starting else "completed_at"
+    if timestamp < to_float(history.get(key), 0):
+        return
+    history[key] = timestamp
+    if completing:
+        history["result"] = content.get("result")
+    elif timestamp > to_float(history.get("completed_at"), 0):
+        device.state["workingState"] = codes.T4_LITTER_CALIBRATION_MODE
+    _clear_completed_t4_calibration(device)
+
+
+def apply_derived_state(device: Device, event_type: str, content: dict, *,
+                        event_time: Any = None) -> None:
     """Fold into `device.state` the values that only an EVENT ever carries.
 
     Four entities -- Last Clean, Last Visit, Last Feed and Pet Weight -- have no
@@ -455,6 +512,8 @@ def apply_derived_state(device: Device, event_type: str, content: dict) -> None:
     code = codes.lookup(event_type, device.device_type)
     if code is None:
         return
+
+    _apply_t4_calibration_event(device, event_type, content, event_time)
 
     if code.kind == codes.KIND_CLEANING and code.role == codes.ROLE_DONE:
         if code.done_word in _CLEAN_DONE_WORDS:

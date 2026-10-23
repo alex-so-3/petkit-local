@@ -305,7 +305,10 @@ async def api_send_command(request: web.Request) -> web.Response:
         ent = next((e for e in get_entities_for_device(d)
                     if e.key == action and e.component == "button"), None)
         if ent is None:
-            suffix, envelope = fn(d)
+            try:
+                suffix, envelope = fn(d)
+            except Refused as exc:
+                return web.json_response({"error": str(exc)}, status=400)
         else:
             try:
                 result = handle_ha_command(d, ent, "")

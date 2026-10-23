@@ -340,6 +340,15 @@ def _result_field(value: Any) -> tuple[str, str]:
     return _enum(RESULT, value, "result {n}")
 
 
+def _event_result(value: Any, event_type: str | None,
+                  device_type: str | None) -> tuple[str, str]:
+    """Calibration result 1 on a T4 is success, not a cleaning termination."""
+    if ((device_type or "").lower() == "t4"
+            and str(event_type) == codes.T4_LITTER_CALIBRATION_EVENT):
+        return _enum(codes.T4_LITTER_CALIBRATION_RESULTS, value, "result {n}")
+    return _result_field(value)
+
+
 # --- the field table -------------------------------------------------------
 
 _Renderer = Callable[[Any], "tuple[str, str]"]
@@ -513,8 +522,8 @@ def decode_content(event_type: str | None,
     """Every field of `content`, decoded and ordered for display.
 
     Total by contract: a key with no `_FieldSpec` still produces a row, graded
-    `unknown`. `event_type` is accepted for future per-code disambiguation and
-    to keep the signature stable; the field table is otherwise shared.
+    `unknown`. `event_type` disambiguates model-specific result values; the
+    remaining field table is shared.
 
     `device_type` is not decoration: `action` is a work-mode enum whose
     vocabulary is per model, so without it the Debug view named a fountain's
@@ -537,7 +546,9 @@ def decode_content(event_type: str | None,
             continue
         renderer = _DEVICE_AWARE.get(key)
         try:
-            if renderer is not None:
+            if key == "result":
+                text, grade = _event_result(value, event_type, device_type)
+            elif renderer is not None:
                 text, grade = renderer(value, device_type)
             else:
                 text, grade = spec.render(value)
@@ -647,7 +658,7 @@ def event_label(event_type: str | None,
             if code.kind == codes.KIND_FEEDING:
                 outcome, _ = _enum(_FEED_RESULT, result, "result {n}")
             else:
-                outcome, _ = _result_field(result)
+                outcome, _ = _event_result(result, raw_type, device_type)
                 if result == 3 and (content or {}).get("kitten"):
                     outcome = RESULT_KITTEN
             label = f"{trigger} {noun} {outcome}" if trigger \
