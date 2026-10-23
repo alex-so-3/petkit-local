@@ -256,6 +256,17 @@ Bluetooth and hand the device an `apiServers` value pointing here instead of at 
 **Provision** tab does it from your browser (Chrome or Edge, on a page served over HTTPS). It is also
 the only way a device ever gets a timezone — one provisioned without it stamps UTC onto its video.
 
+No browser that can do it? Any Linux, macOS or Windows machine with a Bluetooth radio in range can
+run the same exchange from a terminal. The script needs only `bleak` and can be copied on its own:
+
+```sh
+pip install bleak
+WIFI_PASS='...' python3 addon/petkit_local/ble_provision.py --ssid MyWifi --server http://<this-host>/6/
+```
+
+It waits for a device in pairing mode, then speaks whichever protocol the device answers to, exactly
+as the tab does. The timezone and zone name default to the machine running it (`--tz`, `--zone`).
+
 **ESP32 models** — Pura X, Pura Max and the non-camera feeders — can also be redirected by
 DNS, because they talk plain HTTP. Which name to redirect is a property of your device rather than of
 its model: these are handed their API server during Bluetooth setup too, so it is whichever of

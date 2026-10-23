@@ -163,6 +163,10 @@ Bluetooth — your Wi-Fi password is never sent anywhere.
 Chrome or Edge only, on desktop or Android. Firefox, Safari and iOS have no Web
 Bluetooth at all.
 
+**Without a browser:** `petkit_local/ble_provision.py` is the same exchange as a
+command, for a headless machine that has the Bluetooth radio — a Raspberry Pi or
+server in the same room. It needs only `bleak`; the README shows the command.
+
 ## Troubleshooting
 
 - **No entities appear:** confirm the device reached it (the log
