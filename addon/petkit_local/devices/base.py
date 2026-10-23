@@ -27,6 +27,14 @@ from petkit_local.utils.coerce import to_bool, to_float
 from petkit_local.utils.crypto import generate_device_secret, generate_product_key
 from petkit_local.utils.timeutil import local_offset_hours, offset_hours_for_locale
 
+#: `config` key holding the last UTC offset, in hours, that was PUSHED to the
+#: device as a `property.set{timezone}` — by the panel's override endpoint or
+#: by the DST loop (`ha/timezone_sync.py`). Kept apart from `reported_timezone`
+#: (what the device SAID at signup) because the device's own readback is a
+#: lossy `%.1f`, so "what we told it" cannot be recovered from "what it says".
+#: Persisted with the rest of `config`, so a restart does not re-push.
+TIMEZONE_PUSHED_KEY = "timezone_pushed"
+
 
 class Refused(ValueError):
     """The write was understood and rejected, and nothing was changed.
@@ -335,7 +343,9 @@ class Device:
         It CAN be fixed without re-provisioning, though: a `property.set`
         carrying `timezone` as a JSON STRING moves it, verified on a live T5.
         `web/api/devices.py::api_timezone` is the path that does both, and the
-        string is not a detail — see the note there.
+        string is not a detail — see the note there. The device does no DST of
+        its own, so a locale-derived value is pushed again whenever its zone
+        changes offset (`ha/timezone_sync.py`).
         """
         override = to_float(self.config.get("timezone"), None)
         if override is not None:

@@ -243,6 +243,9 @@ BuildKit's own `TARGETARCH` (which is what the 32-bit-ARM glibc base does).
   ~30s. The handler is present in T5 and D4SH (MIPS) and W7-262863 (ARM), where `timezone` is the
   only field in a whole run of `===== set X (%d) =====` handlers read as `%s`. Readback is LOSSY —
   the device reports its own `%.1f`, so `5.75` comes back as `5.8`. HTTP `dev_device_info` still
-  wants a NUMBER for the same field.
+  wants a NUMBER for the same field. The device does no DST of its own, so when the offset comes
+  from its `locale` (no override) `ha/timezone_sync.py` re-pushes it whenever the zone's offset
+  changes — remembering what it sent in `config["timezone_pushed"]` rather than trusting the lossy
+  readback, and forgetting it at the next signup, which is the device's newer word.
 - **K2/K3 entity definitions assume a WiFi purifier** that does not exist — both models are
   BLE-only today.

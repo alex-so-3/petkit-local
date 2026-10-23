@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 from aiohttp import web
 
 from petkit_local.events.ingest import _MODULE_TYPE_TO_CATEGORY, backfill_event_rows
+from petkit_local.ha.timezone_sync import timezone_sync_loop
 from petkit_local.http.bucket import create_bucket_app
 from petkit_local.http.handlers.upload_file_info import wait_for_pending as wait_for_media_tasks
 from petkit_local.media.retention import RetentionSweeper
@@ -271,6 +272,13 @@ async def start_background(services: Services, app_instance: web.Application) ->
             # task is created, precisely so shutdown can find it.
             _spawn(app_instance, "upstream-mqtt-supervisor",
                    upstream_mqtt.supervise())
+
+    # A device holds a fixed UTC offset and knows nothing of DST, so when its
+    # zone changes offset somebody has to tell it (see ha/timezone_sync.py).
+    # Not inside the `no_mqtt` block: a device on HTTP gets the same push
+    # through its heartbeat queue.
+    _spawn(app_instance, "timezone-sync",
+           timezone_sync_loop(registry, mqtt_bridge, hub))
 
     # Camera sidecar. Own task for the same reason as the one above: what it
     # should be running is derived from the devices, not from anything here.

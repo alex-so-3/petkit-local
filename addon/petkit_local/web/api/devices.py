@@ -16,13 +16,11 @@ from typing import TYPE_CHECKING, Any
 from aiohttp import web
 
 from petkit_local.devices import defaults
-from petkit_local.devices.base import Device
+from petkit_local.devices.base import TIMEZONE_PUSHED_KEY, Device
 from petkit_local.devices.state_parsers import apply_consumable_state
 from petkit_local.ha.categories import get_entities_for_device
-from petkit_local.ha.commands import (
-    ALL_ACTIONS, PROPERTY_SET_SUFFIX, Refused, handle_ha_command,
-    make_mqtt_property_set,
-)
+from petkit_local.ha.commands import ALL_ACTIONS, Refused, handle_ha_command
+from petkit_local.ha.timezone_sync import push_timezone
 from petkit_local.media.go2rtc import stream_urls_with_rtsp
 from petkit_local.mqtt.broker import delivery_view
 from petkit_local.utils.coerce import to_float
@@ -168,6 +166,9 @@ def _timezone_view(d: Device) -> dict[str, Any]:
         "override": override,
         "reported": reported,
         "locale": d.config.get("locale", ""),
+        # What the device was last TOLD (by this endpoint or the DST loop), as
+        # opposed to `reported`, which is what it last SAID at signup.
+        "pushed": to_float(d.config.get(TIMEZONE_PUSHED_KEY), None),
         "source": "override" if override is not None
         else "locale" if from_locale is not None
         else "device" if reported is not None else "server",
@@ -351,7 +352,10 @@ async def api_timezone(request: web.Request) -> web.Response:
     POST takes `{"timezone": 5.75}` (a numeric string is accepted, for the HTML
     number input) or `{"timezone": null}` to go back to automatic. The value is
     persisted and used by `dev_signup` and `dev_device_info` from their next
-    request, and pushed to a device that is on MQTT right away.
+    request, and pushed to the device right away (over MQTT if it is there,
+    else through the heartbeat queue). Without an override, the offset derived
+    from the device's locale is pushed again by `ha/timezone_sync.py` whenever
+    DST moves it.
 
     **The MQTT value is a STRING and that is not a style choice.**
     `parse_recv_property_set_normal` reads `cJSON.valuestring` and calls
@@ -386,34 +390,18 @@ async def api_timezone(request: web.Request) -> web.Response:
                 {"error": f"timezone must be a number between {_TZ_MIN:g} "
                           f"and {_TZ_MAX:g}"}, status=400)
         d.config["timezone"] = value
-    reg.save()
 
     # The runtime clock only moves for a `property.set{timezone}` whose value is
-    # a JSON STRING (`f"{...:g}"` keeps it one); `dev_device_info` carries the
-    # number as a fallback for a device that has not yet been pushed. Deliver by
-    # whichever transport is live, and — crucially — fall back to the heartbeat
-    # queue for a device on HTTP. It used to publish only over MQTT, so for a
-    # feeder that never reaches the broker the push was a silent no-op: it stayed
-    # on whatever it reported at signup (UTC for a box given only a locale) and
-    # fired its scheduled meals two hours late.
-    hub = request.app["hub"]
-    bridge = request.app.get("bridge")
-    envelope = make_mqtt_property_set({"timezone": f"{d.timezone_offset:g}"})
-    mqtt_live = (d.mqtt_connected and bridge is not None
-                 and getattr(bridge, "_client", None))
-    delivered = "mqtt"
-    if mqtt_live:
-        try:
-            await bridge.publish_to_device(d, PROPERTY_SET_SUFFIX, envelope)
-        except Exception as exc:  # noqa: BLE001 - transport failure is not a rejection
-            log.warning("timezone push failed for device %d: %s", d.petkit_id, exc)
-            mqtt_live = False
-    if not mqtt_live:
-        envelope["_service_suffix"] = PROPERTY_SET_SUFFIX
-        d.command_queue.append(envelope)
-        delivered = "heartbeat-queue"
-    hub.record_command(d.petkit_id, delivered,
-                       f"{PROPERTY_SET_SUFFIX} timezone={d.timezone_offset:g}")
+    # a JSON STRING; `dev_device_info` carries the number as a fallback for a
+    # device that has not yet been pushed. Deliver by whichever transport is
+    # live, and — crucially — fall back to the heartbeat queue for a device on
+    # HTTP. It used to publish only over MQTT, so for a feeder that never
+    # reaches the broker the push was a silent no-op: it stayed on whatever it
+    # reported at signup (UTC for a box given only a locale) and fired its
+    # scheduled meals two hours late. `push_timezone` does both, and is shared
+    # with the DST loop (`ha/timezone_sync.py`) so the two cannot drift apart.
+    delivered = await push_timezone(d, request.app.get("bridge"), request.app["hub"])
+    reg.save()
 
     return web.json_response({"ok": True, "delivered": delivered, **_timezone_view(d)})
 
