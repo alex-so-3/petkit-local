@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **T4: Finish Litter Calibration.** After filling to MAX and double-pressing
+  OK to level, the new panel/HA button performs the separate final confirmation
+  (`start_action: 6`). Verified on two stock T4/1.652 devices: HTTP event 18
+  reports `result: 1`, with litter at 100% and the use counter reset to zero.
+  T4's event and result are decoded separately from other models, and a retained
+  calibration mode no longer leaves a completed operation displayed as busy.
+
 ## 2.1.0 — 2026-08-12
 
 The YumShare Dual-Hopper (D4SH) camera feeder is now confirmed working, and most

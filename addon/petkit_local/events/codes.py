@@ -418,6 +418,19 @@ LITTER_HTTP_CODES: dict[str, EventCode] = {
     ),
 }
 
+#: Model-specific HTTP event meaning, confirmed on two stock T4/1.652 boxes.
+#: Other models keep the generic, unverified event-18 interpretation above.
+T4_LITTER_CALIBRATION_EVENT = "18"
+T4_LITTER_CALIBRATION_DONE = EventCode(
+    kind=KIND_CLEANING, label="Litter level calibrated", grade=CONFIRMED,
+    role=ROLE_DONE, done_word="litter calibration", families=frozenset({"t4"}),
+    note="Observed after the official app's Finish operation: result=1, "
+         "litter.percent=100 and litter.usedTimes=0. The completion snapshot "
+         "can retain work_mode=6 after the operation has finished.",
+)
+T4_LITTER_CALIBRATION_RESULTS = {1: "completed"}
+
+
 #: Codes absent from both the firmware RE and our wire. Left unmapped on
 #: purpose so `classify_event_kind` logs them once if a T6/T7 ever sends one,
 #: rather than silently bucketing them into a family they may not belong to.
@@ -828,6 +841,11 @@ RECORD_TYPES: dict[str, str] = {
 # state.workState.* -- the CURRENT operation, not a historical event. Also the
 # table the HTTP codes' `action` field decodes against (see module docstring).
 
+# T4 work_mode=6 is calibration, confirmed in the state attached to HTTP
+# event 18 on two stock T4/1.652 devices. Keep this mode namespace separate
+# from the start_action command with the same observed integer.
+T4_LITTER_CALIBRATION_MODE = 6
+
 WORK_MODES: dict[int, str] = {
     0: "cleaning",
     1: "dumping",
@@ -845,6 +863,13 @@ WORK_MODES: dict[int, str] = {
 #: The rest of the enum comes from the state-side reference and is rendered
 #: but graded lower by `events/decode.py`.
 WORK_MODES_OBSERVED = frozenset({0, 2, 9})
+
+#: T4 Android 14.1.0 T4CalibrateLitterTwoFragment.onClick calls
+#: controlDevice(id, 6, 1), producing type=start, kv={"start_action":6}.
+#: Independently confirmed in the official API's HTTP heartbeat downlink,
+#: then on two stock T4/1.652 devices. This is the final confirmation after
+#: filling to MAX and double-pressing OK, not startCorrect/start_action=5.
+T4_LITTER_CALIBRATION_ACTION = 6
 
 #: What a litter box's `thing.service.start {"start_action": N}` asks it to do,
 #: as the APP's own buttons — which is not the same question `WORK_MODES` above
@@ -1042,6 +1067,8 @@ def work_modes_for(device_type: str | None = None) -> dict[int, str]:
     """
     if (device_type or "").lower() in FOUNTAIN_NEXT_GEN:
         return FOUNTAIN_W7H_WORK_MODES
+    if (device_type or "").lower() == "t4":
+        return {**WORK_MODES, T4_LITTER_CALIBRATION_MODE: "litter calibration"}
     return WORK_MODES
 
 #: workProcess is two digits: the tens digit is the phase, the units digit a
@@ -1295,6 +1322,8 @@ def lookup(event_type: str | None,
     if not event_type:
         return None
     key = str(event_type)
+    if (device_type or "").lower() == "t4" and key == T4_LITTER_CALIBRATION_EVENT:
+        return T4_LITTER_CALIBRATION_DONE
 
     category = category_of(device_type) or DEFAULT_HTTP_CATEGORY
     code = HTTP_CODES_BY_CATEGORY.get(category, {}).get(key)
@@ -1318,5 +1347,7 @@ def codes_for(device_type: str | None) -> dict[str, EventCode]:
     codename = device_type.lower()
     category = category_of(codename) or DEFAULT_HTTP_CATEGORY
     table = {**MQTT_EVENT_TOPICS, **HTTP_CODES_BY_CATEGORY.get(category, {})}
+    if codename == "t4":
+        table[T4_LITTER_CALIBRATION_EVENT] = T4_LITTER_CALIBRATION_DONE
     return {key: code for key, code in table.items()
             if codename in code.families}

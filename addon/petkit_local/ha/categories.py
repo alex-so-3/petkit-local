@@ -19,14 +19,15 @@ answering it from `devices/` is what had the device layer importing every
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from petkit_local.devices.base import Device
+from petkit_local.events import codes
 from petkit_local.ha.discovery import EntityDef
 from petkit_local.ha.entities.buttons import (
     FEEDER_BUTTONS, FEEDER_CAMERA_BUTTONS, FEEDER_DUAL_BUTTONS,
     FOUNTAIN_BUTTONS, FOUNTAIN_W7H_BUTTONS,
-    LITTER_BUTTONS, LITTER_CAMERA_BUTTONS, LITTER_T6_BUTTONS,
+    LITTER_BUTTONS, LITTER_CAMERA_BUTTONS, LITTER_T4_BUTTONS, LITTER_T6_BUTTONS,
 )
 from petkit_local.ha.entities.camera import CAMERA_ENTITIES
 from petkit_local.ha.entities.events import (
@@ -186,6 +187,7 @@ CATEGORY_SPECS: dict[str, CategorySpec] = {
         ),
         camera_state_topics=("move_detect", "pet_detect"),
         model_entities=(
+            ("t4", tuple(LITTER_T4_BUTTONS)),
             # The Purobot Ultra is the only litter box with a bagging
             # mechanism, and the only one that reports its state.
             ("t6", (*LITTER_T6_BUTTONS, *LITTER_PACKAGING_SENSORS)),
@@ -394,8 +396,14 @@ def get_entities_for_device(device: Device) -> list[EntityDef]:
     spec = spec_for_device(device)
     if spec is None:
         return []
-    return spec.entities_for(has_camera=device.is_camera,
-                             device_type=device.device_type)
+    entities = spec.entities_for(has_camera=device.is_camera,
+                                 device_type=device.device_type)
+    if device.device_type.lower() == "t4":
+        modes = codes.work_modes_for("t4")
+        entities = [replace(e, options=["idle" if v == -1 else modes[v]
+                                       for v in e.option_values])
+                    if e.key == "device_status" else e for e in entities]
+    return entities
 
 
 def get_setting_fields(device: Device) -> set[str]:

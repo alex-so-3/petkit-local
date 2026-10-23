@@ -216,7 +216,8 @@ async def handle_event_report(request: web.Request) -> web.Response:
 
     # Applied AFTER the state block, so a derived timestamp is not overwritten
     # by the report the same request carried. Shared with `mqtt/bridge.py`.
-    apply_derived_state(device, row["event_type"], content or {})
+    apply_derived_state(device, row["event_type"], content or {},
+                        event_time=form.get("timestamp"))
     registry.mark_dirty()
 
     hub = request.app.get("event_hub")

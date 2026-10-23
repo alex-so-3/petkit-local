@@ -163,6 +163,25 @@ Bluetooth — your Wi-Fi password is never sent anywhere.
 Chrome or Edge only, on desktop or Android. Firefox, Safari and iOS have no Web
 Bluetooth at all.
 
+## T4 litter-level calibration
+
+On the Pura Max (T4), leveling the litter and confirming that it is full are
+separate operations. If the device still reports low litter after a refill:
+
+1. Fill to the **MAX** line, with no cat inside.
+2. Double-press **OK** on the device and wait for leveling to finish.
+3. Press **Finish Litter Calibration** in the panel, or the matching Home
+   Assistant button. Confirm the panel's reminder only after completing the
+   first two steps.
+
+The button is available only for T4 and refuses offline, busy, occupied or
+unknown device state. It confirms the current fill as the new full baseline;
+it is not a way to silence a low-litter warning without adding litter.
+Queued delivery is not calibration success: the displayed percentage and use
+count change only when the device reports them. The command and HTTP completion
+were verified on two stock T4 devices running firmware 1.652. Other models keep
+their existing command meanings.
+
 ## Troubleshooting
 
 - **No entities appear:** confirm the device reached it (the log
