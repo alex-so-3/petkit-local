@@ -375,6 +375,16 @@ FOUNTAIN_BINARY_SENSORS = [
 # them under Diagnostic so the primary card stays the three or four values
 # somebody actually looks at.
 
+#: The deep-clean stage and result enums, imported from `events/codes.py` for
+#: the same reason as `_WORK_MODE_LABELS`. Two stage values share the label
+#: "preparing"; the value template maps each value on its own, so that is fine.
+_DEEP_CLEAN_STAGE_VALUES = sorted(codes.FOUNTAIN_W7H_DISINFECT_STATES)
+_DEEP_CLEAN_STAGE_LABELS = [codes.FOUNTAIN_W7H_DISINFECT_STATES[v]
+                            for v in _DEEP_CLEAN_STAGE_VALUES]
+_DEEP_CLEAN_RESULT_VALUES = sorted(codes.FOUNTAIN_W7H_DISINFECT_RESULTS)
+_DEEP_CLEAN_RESULT_LABELS = [codes.FOUNTAIN_W7H_DISINFECT_RESULTS[v]
+                             for v in _DEEP_CLEAN_RESULT_VALUES]
+
 FOUNTAIN_W7H_SENSORS = [
     # Timestamps, not counters. `drink_time` is when the pet last drank; the
     # map is explicit about it, and reading it as a count is how it nearly
@@ -398,6 +408,23 @@ FOUNTAIN_W7H_SENSORS = [
     EntityDef(component="sensor", key="reboot_reason", name="Reboot Reason",
               value_path="state.rebootReason", icon="mdi:restart",
               entity_category="diagnostic"),
+    # The deep clean. The stage is the same field `disinfecting` reads, decoded;
+    # the other two exist only because `disinfect_over` happened
+    # (`normalize.apply_derived_state`). Not `deep_clean`: that key is the litter
+    # box's "Deep Cleaning" switch. No "soak ends at" sensor: 300 s comes from
+    # one cycle, the device sends no countdown, and a derived key would need
+    # clearing by hand because `device.state` is merged into and never pruned.
+    # No `device_class="enum"`: an unmapped value must still render.
+    EntityDef(component="sensor", key="deep_clean_stage", name="Deep Clean Stage",
+              value_path="state.disinfectState", icon="mdi:shimmer",
+              options=_DEEP_CLEAN_STAGE_LABELS, option_values=_DEEP_CLEAN_STAGE_VALUES),
+    EntityDef(component="sensor", key="last_deep_clean", name="Last Deep Clean",
+              value_path="state.lastDeepClean", device_class="timestamp",
+              icon="mdi:shimmer"),
+    EntityDef(component="sensor", key="last_deep_clean_result",
+              name="Last Deep Clean Result", value_path="state.lastDeepCleanResult",
+              icon="mdi:clipboard-check-outline",
+              options=_DEEP_CLEAN_RESULT_LABELS, option_values=_DEEP_CLEAN_RESULT_VALUES),
 ]
 
 FOUNTAIN_W7H_BINARY_SENSORS = [

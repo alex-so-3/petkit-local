@@ -360,6 +360,22 @@ FEEDER_ACTIONS = {
         })),
 }
 
+
+def _fountain_reset_cycle_pump() -> Command:
+    """Clear a W7H's latched circulation-pump fault (`err.cycM`).
+
+    A SERVICE of its own, like `power`: captured from the official app's "I've
+    cleaned it. Start circulating" as
+    `{"method":"thing.service.reset_cycle_pump","params":{"reset_cycle_pump":1}}`
+    on `thing/service/reset_cycle_pump`. A failed deep clean latches cycM, a
+    reboot does not clear it, and while it is set every `start_action` 4 is
+    refused in the same second (`disinfect_over` result 2). Harmless when no
+    fault is latched.
+    """
+    return ("reset_cycle_pump",
+            _envelope("thing.service.reset_cycle_pump", {"reset_cycle_pump": 1}))
+
+
 def _fountain_start(code: int) -> Command:
     """Begin a water-treatment job on a W7H.
 
@@ -381,6 +397,8 @@ FOUNTAIN_ACTIONS = {
     "fountain_flush": lambda device: _fountain_start(1),
     "fountain_refill": lambda device: _fountain_start(2),
     "fountain_water_change": lambda device: _fountain_start(5),
+    "fountain_deep_clean": lambda device: _fountain_start(4),
+    "fountain_reset_circulation_pump": lambda device: _fountain_reset_cycle_pump(),
 }
 
 ALL_ACTIONS = {**LITTER_ACTIONS, **FEEDER_ACTIONS, **FOUNTAIN_ACTIONS, **SHARED_ACTIONS}

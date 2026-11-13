@@ -447,7 +447,8 @@ def apply_derived_state(device: Device, event_type: str, content: dict) -> None:
     happening. BOTH transports call this, and it has to stay that way: living on
     the MQTT path alone, it would leave every device that reports over HTTP --
     each ESP32 model, and every Ingenic device until the `mqtt` patcher is
-    applied -- with all four reading unknown forever.
+    applied -- with all four reading unknown forever. A W7H's Last Deep Clean
+    and its result are the same kind of value, from `disinfect_over`.
 
     Dispatch goes through `codes.lookup`, which resolves either namespace, so
     the two transports cannot drift apart.
@@ -459,6 +460,13 @@ def apply_derived_state(device: Device, event_type: str, content: dict) -> None:
     if code.kind == codes.KIND_CLEANING and code.role == codes.ROLE_DONE:
         if code.done_word in _CLEAN_DONE_WORDS:
             device.state["lastClean"] = _now_iso()
+        elif code.done_word == codes.DEEP_CLEAN_DONE_WORD:
+            # Only this event says how a deep clean ended. The raw int is kept
+            # and the sensor decodes it (`codes.FOUNTAIN_W7H_DISINFECT_RESULTS`),
+            # so an unmapped code still shows. Junk or missing -> None, never a
+            # stale result beside a fresh timestamp.
+            device.state["lastDeepClean"] = _now_iso()
+            device.state["lastDeepCleanResult"] = to_int(content.get("result"), None)
 
     elif code.kind == codes.KIND_TOILET and code.role == codes.ROLE_VISIT_SUMMARY:
         device.state["lastVisit"] = _now_iso()

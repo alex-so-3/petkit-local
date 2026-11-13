@@ -315,7 +315,7 @@ CATEGORY_SPECS: dict[str, CategorySpec] = {
         # and `add_water_over` a second after a `drink_start`; neither is a
         # thing any other EverSweet does, so neither belongs on the shared list.
         model_state_topics=(
-            ("w7h", ("work_start", "add_water_over")),
+            ("w7h", ("work_start", "add_water_over", "disinfect_over")),
         ),
         # Everything the W7H cannot fill. The list above is what it reports
         # instead; between the two, the fountain family covers both hardware
