@@ -168,6 +168,11 @@ ROLE_ERROR_START = "error_start"
 ROLE_ERROR_OVER = "error_over"
 ROLE_DETECTION = "detection"
 
+#: `done_word` of the W7H's deep-clean (disinfect) completion. Read by
+#: `normalize.apply_derived_state` and `decode.event_label`, which must not
+#: treat it as a litter clean or read its `result` from the litter table.
+DEEP_CLEAN_DONE_WORD = "deep cleaning"
+
 
 @dataclass(frozen=True)
 class EventCode:
@@ -507,6 +512,34 @@ FEEDER_HTTP_CODES: dict[str, EventCode] = {
 #: is the only embedded-Linux fountain, and a Bluetooth EverSweet has no HTTP
 #: path at all, so the codes are keyed on `FOUNTAIN_NEXT_GEN`.
 FOUNTAIN_HTTP_CODES: dict[str, EventCode] = {
+    # 1, 2 and 3 share their NUMBERS with litter 1/2/3 and, as far as the shape
+    # goes, their meanings — but this is a separate per-category table, and a
+    # fountain row is evidence only for the fountain. All three arrived on a W7H
+    # (capture 2026-11, fw 456, the official app in proxy mode) in the same
+    # session as code 12, before the device was up on MQTT.
+    "1": EventCode(
+        kind=KIND_ERROR, label="Error", grade=INFERRED, anchor=True,
+        role=ROLE_ERROR_START, families=FOUNTAIN_NEXT_GEN,
+        note="Seen on a W7H (capture 2026-11, fw 456) around a failed deep "
+             "clean. Read as an error start from its pairing with code 2 and "
+             "the litter table's code 1; no firmware name and its content "
+             "was not captured.",
+    ),
+    "2": EventCode(
+        kind=KIND_ERROR, label="Error cleared", role=ROLE_ERROR_OVER,
+        families=FOUNTAIN_NEXT_GEN,
+        note="W7H (capture 2026-11, fw 456): arrived ~10 s after the app's "
+             "thing.service.reset_cycle_pump, carrying err \"cycM\", after "
+             "which err{} was empty and pumpState back to 0. Confirmed for "
+             "that shape; other faults clearing are assumed to look the same.",
+    ),
+    "3": EventCode(
+        kind=KIND_CLEANING, label="Work started", grade=INFERRED, detail=True,
+        role=ROLE_START, mode_from="action", families=FOUNTAIN_NEXT_GEN,
+        note="W7H (capture 2026-11, fw 456), before MQTT was up. Taken as the "
+             "HTTP twin of MQTT work_start, so `action` decodes against "
+             "FOUNTAIN_W7H_WORK_MODES; the content itself was not captured.",
+    ),
     "5": EventCode(
         kind=KIND_DRINKING, label="Drinking started", detail=True,
         role=ROLE_START, families=FOUNTAIN_NEXT_GEN,
@@ -520,6 +553,17 @@ FOUNTAIN_HTTP_CODES: dict[str, EventCode] = {
              "{img, aesKey, mark, start_time, event_start, event_end, "
              "drink_time, media, upload, drinkDetection, pet_id, "
              "tracker_info, vomit_info} matches MQTT drink_over/post.",
+    ),
+    "12": EventCode(
+        kind=KIND_CLEANING, label="Deep clean done", anchor=True,
+        role=ROLE_DONE, done_word=DEEP_CLEAN_DONE_WORD,
+        families=FOUNTAIN_NEXT_GEN,
+        note="Confirmed on a W7H (capture 2026-11, fw 456, the official app "
+             "in proxy mode): sent over HTTP while the device was not yet on "
+             "MQTT, where its twin is disinfect_over/post. Content "
+             "{start_time, event_start, event_end, start_reason, result, "
+             "err}. `result` is FOUNTAIN_W7H_DISINFECT_RESULTS, NOT the litter "
+             "RESULT table, where 2 means something else.",
     ),
     "20": EventCode(
         kind=KIND_PET, label="Appeared", anchor=True,
@@ -759,6 +803,16 @@ MQTT_EVENT_TOPICS: dict[str, EventCode] = {
         kind=KIND_CLEANING, label="Water change done", anchor=True,
         role=ROLE_DONE, done_word="changing the water",
         families=FOUNTAIN_NEXT_GEN),
+    "disinfect_over": EventCode(
+        kind=KIND_CLEANING, label="Deep clean done", anchor=True,
+        role=ROLE_DONE, done_word=DEEP_CLEAN_DONE_WORD,
+        families=FOUNTAIN_NEXT_GEN,
+        note="Captured on a W7H (2026-11, fw 456) as "
+             "thing/event/disinfect_over/post; the MQTT twin of fountain "
+             "HTTP code 12, same content. Ends the start_action 4 cycle, "
+             "and on success the device then starts a refill by itself "
+             "(work_start action 2). `result` is "
+             "FOUNTAIN_W7H_DISINFECT_RESULTS, not the litter RESULT table."),
     # -- shared detection
     "move_detect": EventCode(
         kind=KIND_MOTION, label="Motion detected", anchor=True,
@@ -997,9 +1051,16 @@ WEEKDAY_NAMES: dict[int, str] = {
 #: command whitelist below but reaches the event detector's default branch, so
 #: "refill" is the app's meaning attached to a value the firmware only lets
 #: through. Graded accordingly — it is the one entry here that could be wrong.
+#:
+#: 4 is not named by the firmware either (it too reaches the default branch of
+#: `work_start_event_detect`), but the app names it: a capture of the official
+#: app (2026-11, fw 456) has "Deep clean" sending `start_action` 4, the device
+#: echoing `work_start {"action":4,"reason":2}`, and `workState.workMode` 4 for
+#: the whole cycle. Confirmed.
 FOUNTAIN_W7H_WORK_MODES: dict[int, str] = {
     1: "flush",
     2: "refill",
+    4: "deep clean",
     5: "water change",
 }
 
@@ -1043,6 +1104,35 @@ def work_modes_for(device_type: str | None = None) -> dict[int, str]:
     if (device_type or "").lower() in FOUNTAIN_NEXT_GEN:
         return FOUNTAIN_W7H_WORK_MODES
     return WORK_MODES
+
+
+#: `state.disinfectState` during a W7H deep clean (capture 2026-11, fw 456):
+#: 1 (+0 s) -> 2 (+6 s) -> 3 (+24 s, `disinfectTime` becomes the epoch of that
+#: moment) -> 0 when the soak ends. The soak lasted exactly 300 s in the one
+#: cycle seen. 0 and 3 are confirmed; 1 and 2 are both "preparing" because
+#: nothing tells them apart (inferred). heat* stayed 0 throughout on a unit
+#: with `heatInstall: 0`. The device sends no countdown.
+FOUNTAIN_W7H_DISINFECT_STATES: dict[int, str] = {
+    0: "idle",
+    1: "preparing",
+    2: "preparing",
+    3: "soaking",
+}
+
+#: `content.result` of `disinfect_over` / fountain HTTP 12. Its own vocabulary,
+#: like the feeder's: NOT the litter RESULT table (where 2 is "failed").
+#:    0  confirmed: full cycle watched end to end, err "".
+#:    2  inferred: start, work_start and this event in the same second while
+#:       err.cycM was latched; err "cycM".
+#:   16  inferred: ~28 s in, err "cycM". The label is the APP's wording
+#:       (boiling water is poured in by hand); the firmware never measured a
+#:       temperature (`heatInstall` 0), so how it decides is unknown. This
+#:       abort LATCHES cycM.
+FOUNTAIN_W7H_DISINFECT_RESULTS: dict[int, str] = {
+    0: "completed",
+    2: "refused (pump fault active)",
+    16: "aborted (water not hot enough)",
+}
 
 #: workProcess is two digits: the tens digit is the phase, the units digit a
 #: detail (22 means paused with a safeWarn reason).
@@ -1148,6 +1238,9 @@ FOUNTAIN_W7H_ERROR_FLAGS: dict[str, str] = {
     "valveE": "Valve error",
     "valveN": "Valve timeout",
     "cycL": "Circulation pump stalled",
+    # Latches after a failed deep clean (capture 2026-11, fw 456) and survives
+    # a reboot; only `thing.service.reset_cycle_pump` clears it (ha/commands.py),
+    # after which pumpState goes 2 -> 0 and an error-over (HTTP 2) arrives.
     "cycM": "Circulation pump fault",
     "repL": "Refill pump stalled",
     "repM": "Refill pump fault",

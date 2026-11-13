@@ -64,6 +64,16 @@ async def test_clean_over_sets_last_clean_and_fires_cleaning_event():
     assert any(s == "cleaning_event" and e == "clean_over" for _, s, e, _ in pub.events)
 
 
+async def test_disinfect_over_records_the_result_and_fires_the_work_event():
+    reg, _, ble, pub, bridge = _setup()
+    dev = reg.get_or_create(petkit_id=11, device_type="w7h", serial_number="SN")
+    await bridge._handle_event(dev, "disinfect_over", {"params": {"content": json.dumps(
+        {"result": 0, "err": "", "start_reason": 2})}})
+    assert dev.state["lastDeepCleanResult"] == 0
+    assert dev.state["lastDeepClean"]
+    assert ("cleaning_event", "disinfect_over") in [(s, e) for _, s, e, _ in pub.events]
+
+
 async def test_property_syncs_known_settings_and_ignores_others():
     reg, dev, ble, pub, bridge = _setup()
     await bridge._handle_event(dev, "property", {"params": {"autoWork": 0, "sandPercent": 40}})

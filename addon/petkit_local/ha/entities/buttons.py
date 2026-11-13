@@ -95,18 +95,23 @@ FOUNTAIN_BUTTONS = [
 
 #: The W7H's water-treatment jobs, as `thing.service.start` actions.
 #:
-#: These are the only three of the twenty values its firmware accepts
+#: These are the only four of the twenty values its firmware accepts
 #: (`codes.FOUNTAIN_W7H_START_ACTIONS`) that anything names. 1 and 5 name
 #: themselves — `work_start_event_detect` gives each its own branch, log line
 #: and still (`fPro_flushStart.jpeg`, `fPro_changeStart.jpeg`). 2 is on the
 #: accept list but reaches that function's default branch, so "Refill" is the
 #: app's word for a value the firmware only lets through; if it turns out to
-#: mean something else, this is the button that is wrong.
+#: mean something else, this is the button that is wrong. 4 is the same kind
+#: of value, named by a capture of the app instead (see below).
 #:
-#: Deep clean is deliberately absent. The cycle exists (`ster_mode_*.aac`, the
-#: `disinfectState` field, "Boil ster over result" in the log) but no accepted
-#: action value can be tied to it, and it is the one job that needs a person
-#: standing there with a kettle.
+#: Deep clean is `start_action` 4 (app capture 2026-11, fw 456;
+#: `codes.FOUNTAIN_W7H_WORK_MODES`). It needs a person to pour in boiling
+#: water; without it the device aborts after ~28 s with result 16 — harmless,
+#: but it latches `err.cycM`, and while cycM is latched every further deep
+#: clean is refused in the same second (result 2). Hence the second button,
+#: the app's own `reset_cycle_pump` service. It is always available rather
+#: than shown only while cycM is set, because a press with no fault latched
+#: does nothing.
 FOUNTAIN_W7H_BUTTONS = [
     EntityDef(component="button", key="fountain_flush", name="Flush",
               icon="mdi:water-sync"),
@@ -114,6 +119,10 @@ FOUNTAIN_W7H_BUTTONS = [
               icon="mdi:water-plus"),
     EntityDef(component="button", key="fountain_water_change", name="Water Change",
               icon="mdi:water-boiler-alert"),
+    EntityDef(component="button", key="fountain_deep_clean", name="Deep Clean",
+              icon="mdi:pot-steam"),
+    EntityDef(component="button", key="fountain_reset_circulation_pump",
+              name="Reset Circulation Pump", icon="mdi:pump"),
     # What the removed `pause_fountain`/`resume_fountain` were reaching for.
     # Those wrote `{"power": 0|1}` through `property.set`, and `power` is not
     # among this firmware's set handlers, so they wrote a field nothing reads.

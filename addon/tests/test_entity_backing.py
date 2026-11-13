@@ -26,6 +26,7 @@ from petkit_local.utils.const import DEVICE_TYPES_ALL
 RUNTIME_DERIVED = {
     # events/normalize.py::apply_derived_state, from a completed event
     "lastClean", "lastVisit", "lastFeed", "petWeight",
+    "lastDeepClean", "lastDeepCleanResult",
     # ha/publisher.py::publish_media_ready, when the media pipeline files a clip
     "lastClipPath",
     # ha/publisher.py::_build_state, from the device IP plus the camera patcher

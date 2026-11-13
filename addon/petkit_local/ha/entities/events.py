@@ -47,7 +47,7 @@ FEEDER_EVENTS = [
 FOUNTAIN_W7H_EVENTS = [
     EntityDef(component="event", key="cleaning_event", name="Work Event",
               icon="mdi:water-sync",
-              options=["work_start", "add_water_over"]),
+              options=["work_start", "add_water_over", "disinfect_over"]),
     EntityDef(component="event", key="drinking_event", name="Drinking Event",
               icon="mdi:cup-water",
               options=["drink_start", "drink_over"]),
